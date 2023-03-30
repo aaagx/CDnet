@@ -1,0 +1,39 @@
+# Dataset
+dataset: 'prw'
+dataset_dir: '/home/ubuntu/datasets/PRW'
+train_set: 'trainval'
+test_set: 'test'
+retrieval_name_list: ('test',)
+
+# OIM
+oim_type: "LOIM"
+oim_cq_size: 500
+### OIM LUT update momentum
+oim_momentum: 0.5
+### Inverse temperature parameter
+oim_scalar: 30.0
+emb_norm_type: 'protonorm'
+decouple_mode: False
+# Model
+model: 'resnet'
+backbone_arch: 'resnet50'
+
+# GFN
+use_gfn: False
+gfn_mode: 'combined'
+gfn_query_mode: 'batch'
+gfn_scene_pool_size: 56
+
+# Optimization
+epochs: 50
+batch_size: 12
+
+# Augmentation
+aug_mode: 'rrc2'
+aug_crop_res: 640
+
+# Logging
+trial_name: 'prw_final'
+eval_interval: 5
+ckpt_interval: 10
+log_dir: './logging'

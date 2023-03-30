@@ -1,0 +1,7 @@
+[console_scripts]
+osr_model_convert = osr.app.convert:main
+osr_model_shrink = osr.app.shrink:main
+osr_prep_cuhk = osr.data.cuhk_utils:main
+osr_prep_prw = osr.data.prw_utils:main
+osr_run = osr.engine.main:main
+osr_search = osr.app.search:main
