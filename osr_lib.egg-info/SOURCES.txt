@@ -32,6 +32,7 @@ src/losses/oim_loss.py
 src/losses/protoNorm.py
 src/models/__init__.py
 src/models/backbone.py
+src/models/convnextV2.py
 src/models/gfn.py
 src/models/seqnext.py
 src/models/transform.py

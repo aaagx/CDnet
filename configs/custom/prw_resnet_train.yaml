@@ -15,18 +15,20 @@ oim_scalar: 30.0
 emb_norm_type: 'protonorm'
 decouple_mode: False
 # Model
-model: 'resnet'
-backbone_arch: 'resnet50'
+# model: 'resnet'
+# backbone_arch: 'resnet50'
+model: 'convnext'
+backbone_arch: 'convnext_base'
 
 # GFN
 use_gfn: False
-gfn_mode: 'combined'
-gfn_query_mode: 'batch'
-gfn_scene_pool_size: 56
+# gfn_mode: 'combined'
+# gfn_query_mode: 'batch'
+# gfn_scene_pool_size: 56
 
 # Optimization
 epochs: 50
-batch_size: 12
+batch_size: 8
 
 # Augmentation
 aug_mode: 'rrc2'

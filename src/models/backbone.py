@@ -10,6 +10,7 @@ from torchvision.ops import misc as misc_nn_ops
 ## Types
 from typing import Dict
 from torch import Tensor
+from osr.models.convnextV2 import ConvNeXtV2,load_convnextV2
 
 
 # Legacy resnet50 backbone
@@ -167,6 +168,12 @@ def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True):
         if pretrained:
             weights = torchvision.models.ConvNeXt_Large_Weights.IMAGENET1K_V1
         convnext = torchvision.models.convnext_large(weights=weights)
+    elif arch == 'convnextV2_base':
+        print('==> Backbone: ConvNextV2 base')
+        convnext = ConvNeXtV2(depths=[3, 3, 27, 3], dims=[128, 256, 512, 1024])
+        if pretrained:
+            load_convnextV2(convnext,"./checkpoints/convnextv2_base_1k_224_fcmae.pt")
+
     else:
         raise NotImplementedError
 
