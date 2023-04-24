@@ -143,7 +143,7 @@ class SeqNeXt(nn.Module):
         if config['model'] == 'resnet':
             backbone, prop_head = build_resnet(arch=config['backbone_arch'],
                 pretrained=config['pretrained'],
-                freeze_backbone_batchnorm=config['freeze_backbone_batchnorm'], freeze_layer1=config['freeze_layer1'])
+                freeze_backbone_batchnorm=config['freeze_backbone_batchnorm'], freeze_layer1=config['freeze_layer1'],user_arm_module=config['user_arm_module'])
         elif config['model'] == 'convnext':
             backbone, prop_head = build_convnext(arch=config['backbone_arch'],
                 pretrained=config['pretrained'],
@@ -364,6 +364,7 @@ class SeqNeXt(nn.Module):
 
         # RPN
         rpn_features = bb_features
+        # print(bb_features)
         proposals, proposal_losses = self.rpn(images, rpn_features, targets)
         _, detector_losses = self.roi_heads(bb_features, proposals, images.image_sizes, targets)
 

@@ -181,11 +181,13 @@ def convnextv2_huge(**kwargs):
 
 
 def load_convnextV2(path,model):
-        checkpoint = torch.load(path, map_location='cpu')
 
+        print(path)
+        checkpoint = torch.load(path)
         print("Load pre-trained checkpoint from: %s" % path)
         checkpoint_model = checkpoint['model']
         state_dict = model.state_dict()
+
         for k in ['head.weight', 'head.bias']:
             if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
                 print(f"Removing key {k} from pretrained checkpoint")
@@ -199,15 +201,15 @@ def load_convnextV2(path,model):
                'proj' in k or 'pred' in k:
                 print(f"Removing key {k} from pretrained checkpoint")
                 del checkpoint_model[k]
-        
+        # print(checkpoint_model.items)
         checkpoint_model = remap_checkpoint_keys(checkpoint_model)
-
+        # print(checkpoint_model.items)
         load_state_dict(model, checkpoint_model, prefix='')
         
         # manually initialize fc layer
         trunc_normal_(model.head.weight, std=2e-5)
         torch.nn.init.constant_(model.head.bias, 0.)
-
+  
 
 def load_state_dict(model, state_dict, prefix='', ignore_missing="relative_position_index"):
     missing_keys = []
@@ -293,4 +295,4 @@ def remap_checkpoint_keys(ckpt):
             new_ckpt[k] = v.reshape(-1)
         elif 'grn' in k:
             new_ckpt[k] = v.unsqueeze(0).unsqueeze(1)
-    return 
+    return new_ckpt

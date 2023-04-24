@@ -167,3 +167,4 @@ tuple_key_list:
     - image_std
 
 decouple_mode: False
+user_arm_module: False
