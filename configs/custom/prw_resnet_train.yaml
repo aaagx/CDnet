@@ -4,7 +4,7 @@ dataset_dir: '/home/ubuntu/datasets/PRW'
 train_set: 'trainval'
 test_set: 'test'
 retrieval_name_list: ('test',)
-
+workers: 8
 # OIM
 oim_type: "LOIM"
 oim_cq_size: 500
@@ -15,11 +15,12 @@ oim_scalar: 30.0
 emb_norm_type: 'protonorm'
 decouple_mode: False
 # Model
-model: 'resnet'
-backbone_arch: 'resnet50'
-# model: 'convnext'
-# backbone_arch: 'convnextV2_base'
-user_arm_module: True
+# model: 'resnet'
+# backbone_arch: 'resnet50'
+model: 'convnext'
+backbone_arch: 'convnext_fpn'
+user_arm_module: False
+pretrained: False
 
 
 # GFN
@@ -30,7 +31,9 @@ use_gfn: False
 
 # Optimization
 epochs: 50
-batch_size: 8
+batch_size: 5
+# use_amp: False
+lr_steps: (20, 35)
 
 # Augmentation
 aug_mode: 'rrc2'
@@ -42,3 +45,7 @@ trial_name: 'prw_final'
 eval_interval: 5
 ckpt_interval: 10
 log_dir: './logging'
+
+# box_head_mode: 'nae'
+share_head: True
+debug: ~ 

@@ -20,13 +20,15 @@ from torch import Tensor
 
 # Package imports
 ## Models
-from osr.models.backbone import build_resnet, build_convnext
-from osr.models.transform import GeneralizedRCNNTransform
-from osr.models.gfn import GalleryFilterNetwork
+import sys
+sys.path.append("./src")
+from models.backbone import build_resnet, build_convnext
+from models.transform import GeneralizedRCNNTransform
+from models.gfn import GalleryFilterNetwork
 ## Losses
-from osr.losses.oim_loss import OIMLossSafe
-from osr.losses.oim_loss import LOIMLossSafe
-from osr.losses.protoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
+from losses.oim_loss import OIMLossSafe
+from losses.oim_loss import LOIMLossSafe
+from losses.protoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 
 
 class SafeBatchNorm1d(nn.BatchNorm1d):
@@ -147,7 +149,7 @@ class SeqNeXt(nn.Module):
         elif config['model'] == 'convnext':
             backbone, prop_head = build_convnext(arch=config['backbone_arch'],
                 pretrained=config['pretrained'],
-                freeze_layer1=config['freeze_layer1'])
+                freeze_layer1=config['freeze_layer1'],user_arm_module=config['user_arm_module'])
         else:
             raise NotImplementedError
 
@@ -187,7 +189,11 @@ class SeqNeXt(nn.Module):
 
         # Set up box predictors
         faster_rcnn_predictor = FastRCNNPredictor(box_channels, 2)
-        reid_head = copy.deepcopy(prop_head)
+        if(config['share_head']==True):
+            print("use share_head")
+            reid_head=prop_head
+        else:
+            reid_head = copy.deepcopy(prop_head)
 
         # Set up RoI Align
         box_roi_pool = reid_roi_pool = MultiScaleRoIAlign(
@@ -221,6 +227,7 @@ class SeqNeXt(nn.Module):
         else:
             reid_loss = OIMLossSafe(config['emb_dim'], oim_lut_size,
                 config['oim_cq_size'], config['oim_momentum'], config['oim_scalar'])
+
         # Gallery-Filter Network
         if self.use_gfn:
             ## Build Gallery Filter Network
@@ -442,6 +449,7 @@ class SeqRoIHeads(RoIHeads):
         if self.box_head_mode == 'rcnn':
             self.score_predictor = FastRCNNPredictor(box_channels, 1)
 
+
     def forward(self, bb_features: Dict[str, Tensor], proposals: List[Tensor],
         image_shapes: List[Tuple[int, int]], targets:Optional[List[Dict[str, Tensor]]]=None) -> Tuple[List[Dict[str, Tensor]], Dict[str, Tensor]]:
         """
@@ -467,6 +475,7 @@ class SeqRoIHeads(RoIHeads):
         
 
         # ------------------- Faster R-CNN head ------------------ #
+        
         prop_features = bb_features
         proposal_features = self.box_roi_pool(prop_features, reg_proposals, image_shapes)
         proposal_features = self.prop_head(proposal_features)
@@ -540,8 +549,8 @@ class SeqRoIHeads(RoIHeads):
             box_cls_scores = box_cls_scores.squeeze(1)
             box_regs = box_regs.repeat(1, 2)
         else:
-            #box_regs = self.box_predictor(box_features[self.box_head.featmap_names[-1]])
-            raise Exception
+            box_regs = self.box_predictor(box_features[self.box_head.featmap_names[-1]])
+            # raise Exception
 
         if box_cls_scores.dim() == 0:
             box_cls_scores = box_cls_scores.unsqueeze(0)

@@ -41,6 +41,8 @@ freeze_backbone_batchnorm: True
 ### Whether to load pretrained weights
 pretrained: True
 
+share_head: False
+
 # GFN
 ### Whether to use the GFN
 use_gfn: True

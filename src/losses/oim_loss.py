@@ -2,7 +2,9 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
-from osr.losses.protoNorm import PrototypeNorm1d
+import sys
+sys.path.append("./src")
+from losses.protoNorm import PrototypeNorm1d
 
 # Refactored OIM loss with safe float16 computation
 class OIMLossSafe(nn.Module):
@@ -132,7 +134,7 @@ class LOIMLossSafe(nn.Module):
         loss_oim = (_loss_oim / _loss_oim.size(0)).sum()
         with torch.no_grad():
             targets = label
-            if(ious.mean()<0.5):
+            if(ious.mean()<0.2):
                 for x, y in zip(inputs, targets):
                     if y < len(self.lut):
                         self.lut[y] = F.normalize(self.momentum * self.lut[y] + (1.0 - self.momentum) * x, dim=0)

@@ -6,7 +6,7 @@ import torch
 import collections
 
 # Local imports
-from osr.engine import dist_utils
+import dist_utils
 
 
 # Function to train for one epoch
@@ -88,7 +88,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, op
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
             # Empty GPU cache
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
 
         # Catch loss \in {nan, inf}, and RuntimeError: CUDA out of memory.
         except RuntimeError as e:

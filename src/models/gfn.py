@@ -12,8 +12,10 @@ import torch.nn.functional as F
 from typing import Dict
 from torch import Tensor
 
+import sys
+sys.path.append("./src")
 # Package imports
-from osr.losses.ntxent_loss import SafeNTXentLoss
+from losses.ntxent_loss import SafeNTXentLoss
 
 
 # Applies "RoI Pooling" to entire feature map extent

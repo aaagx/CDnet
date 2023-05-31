@@ -23,10 +23,10 @@ from ray.tune.integration.torch import distributed_checkpoint_dir
 
 # Package imports
 ## engine
-from osr.engine import dist_utils
-from osr.engine.train import train_one_epoch
-from osr.engine import evaluate
-from osr.engine import utils as engine_utils
+import dist_utils
+from train import train_one_epoch
+import evaluate
+import utils as engine_utils
 
 
 def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
@@ -190,6 +190,7 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
         if config['debug']:
             pprint(report_dict)
         else:
+            print(report_dict)
             tune.report(**report_dict)
 
 

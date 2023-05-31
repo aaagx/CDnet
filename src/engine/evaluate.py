@@ -11,7 +11,7 @@ from tqdm import tqdm
 from ray.tune.integration.torch import is_distributed_trainable
 from torchvision.ops import boxes as box_ops
 # Package imports
-from osr.engine import utils as engine_utils
+import utils as engine_utils
 
 
 # Define objects to neatly store results

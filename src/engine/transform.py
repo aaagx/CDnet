@@ -6,7 +6,7 @@ import albumentations as albu
 import cv2
 
 # Package imports
-from osr.engine import albu_transform as albu_fork
+import albu_transform as albu_fork
 
 
 # xywh -> x1y1x2y2

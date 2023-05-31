@@ -12,13 +12,15 @@ from ray.tune.integration.torch import is_distributed_trainable
 
 # Package imports
 ## SeqNeXt model
-from osr.models.seqnext import SeqNeXt
+import sys
+sys.path.append("./src")
+from models.seqnext import SeqNeXt
 ## engine
-from osr.engine import transform
-from osr.engine.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
-from osr.engine import dist_utils
+import transform
+from group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
+import dist_utils
 ## data
-from osr.data import det_utils
+from data import det_utils
 
 
 # Helper function to move data to GPU

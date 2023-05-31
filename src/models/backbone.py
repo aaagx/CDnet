@@ -22,7 +22,9 @@ from torch.nn.modules.utils import _pair
 ## Types
 from typing import Dict
 from torch import Tensor
-from osr.models.convnextV2 import ConvNeXtV2,load_convnextV2
+import sys
+sys.path.append("./src")
+from models.convnextV2 import ConvNeXtV2,load_convnextV2
 
 
 # Legacy resnet50 backbone
@@ -109,6 +111,29 @@ class ConvnextBackbone(Backbone):
         self.body = IntermediateLayerGetter(convnext.features, return_layers=return_layers)
         self.out_channels = convnext.features[5][-1].block[5].out_features
 
+class fpnBackbone(Backbone):
+    def __init__(self,fpn):
+        super().__init__()
+        return_layers = {
+            'smooth1': 'feat_res4',
+        }
+        self.body= IntermediateLayerGetter(fpn, return_layers=return_layers)
+        self.out_channels = 512
+
+
+class fpnHead(Head):
+     def __init__(self,convnext):
+        super().__init__()
+        self.head = nn.Sequential(
+            copy.deepcopy(convnext.features[6]),
+            copy.deepcopy(convnext.features[7]),
+        )
+        # self.out_channels = [
+        #     convnext.features[5][-1].block[5].out_features,#512
+        #     convnext.features[7][-1].block[5].out_features,#1024
+        # ]
+        self.featmap_names = ['feat_res4', 'feat_res5']
+        self.out_channels = [512,1024]
 
 # Convnext Head
 class ConvnextV2Head(Head):
@@ -122,6 +147,7 @@ class ConvnextV2Head(Head):
             convnext.stages[2][-1].pwconv2.out_features,
             convnext.stages[3][-1].pwconv2.out_features,
         ]
+        print(self.out_channels)
         self.featmap_names = ['feat_res4', 'feat_res5']
 
 class ConvnextV2Backbone(Backbone):
@@ -151,8 +177,8 @@ class ConvnextHead(Head):
             convnext.features[7],
         )
         self.out_channels = [
-            convnext.features[5][-1].block[5].out_features,
-            convnext.features[7][-1].block[5].out_features,
+            convnext.features[5][-1].block[5].out_features,#512
+            convnext.features[7][-1].block[5].out_features,#1024
         ]
         self.featmap_names = ['feat_res4', 'feat_res5']
 
@@ -188,7 +214,7 @@ def build_resnet(arch='resnet50', pretrained=True,
 
 
 # convnext model builder function
-def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True):
+def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True, user_arm_module=False):
     # weights
     weights = None
 
@@ -219,6 +245,11 @@ def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True):
         if pretrained:
             load_convnextV2("/home/ubuntu/GFN-1.1.0/checkpoints/convnextv2_base_22k_224_ema.pt",convnext)
             print("/home/ubuntu/GFN-1.1.0/checkpoints/convnextv2_base_22k_224_ema.pt")
+    elif arch == 'convnext_fpn':
+         print('==> Backbone: convnext_fpn')
+         if pretrained:
+            weights = torchvision.models.ConvNeXt_Base_Weights.IMAGENET1K_V1
+         convnext = torchvision.models.convnext_base(weights=weights)
     else:
         raise NotImplementedError
 
@@ -229,14 +260,22 @@ def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True):
         if arch == 'convnextV2_base':
             convnext.downsample_layers.requires_grad_(False)
             backbone, head = ConvnextV2Backbone(convnext), ConvnextV2Head(convnext)
-
         else:
-            convnext.features[0].requires_grad_(False)
-            backbone, head = ConvnextBackbone(convnext), ConvnextHead(convnext)
-
+            if user_arm_module == False:
+                convnext.features[0].requires_grad_(False)
+                backbone, head = ConvnextBackbone(convnext), ConvnextHead(convnext)
+                if arch == 'convnext_fpn':
+                    fpn= FPN(convnext)
+                    backbone, head = fpnBackbone(fpn), fpnHead(convnext)
+            else:
+                convnext.features[0].requires_grad_(False)
+                backbone, head = ConvnextBackbone(convnext), ArmNextHead(convnext)
 
     # return backbone, head
     return backbone, head
+
+
+
 
 
 class ArmRes5Head(Head):
@@ -250,6 +289,7 @@ class ArmRes5Head(Head):
         self.qconv2 = nn.Conv2d(in_channels=256, out_channels=1024, kernel_size=1)
         
     def forward(self, x) -> Dict[str, Tensor]:
+        #print(x.shape)
         qconv1 = self.qconv1(x)
         x_sc_mlp_feat=self.mlP_model(qconv1)
         qconv2 = self.qconv2(x_sc_mlp_feat)
@@ -259,7 +299,37 @@ class ArmRes5Head(Head):
         feat = torch.amax(feat, dim=(2, 3), keepdim=True)
         return {"feat_res4": x, "feat_res5": feat}
 
+class ArmNextHead(Head):
+    def __init__(self, convnext):
+        super().__init__()
+        self.head = nn.Sequential(
+            convnext.features[6],
+            convnext.features[7],
+        )
+        self.out_channels = [
+            convnext.features[5][-1].block[5].out_features,
+            convnext.features[7][-1].block[5].out_features,
+        ]
+        self.featmap_names = ['feat_res4', 'feat_res5']
+        self.inconv=nn.Conv2d(in_channels=512,out_channels=1042,kernel_size=1)
+        self.mlP_model = ARM_Mixer(in_channels=256, image_size=14, patch_size=1)
+        self.qconv1 = nn.Conv2d(in_channels=1024, out_channels=256, kernel_size=1)
+        self.qconv2 = nn.Conv2d(in_channels=256, out_channels=1024, kernel_size=1)
+        self.outconv=nn.Conv2d(in_channels=1024,out_channels=512,kernel_size=1)
+        
+    def forward(self, x) -> Dict[str, Tensor]:
+        #print(x.shape)
+        x=self.inconv(x)
+        qconv1 = self.qconv1(x)
+        x_sc_mlp_feat=self.mlP_model(qconv1)
+        qconv2 = self.qconv2(x_sc_mlp_feat)
+        qconv2=self.outconv(qconv2)
+        feat = self.head(qconv2)
+        qconv2 = torch.amax(qconv2, dim=(2, 3), keepdim=True)
+        feat = torch.amax(feat, dim=(2, 3), keepdim=True)
+        return {"feat_res4": qconv2, "feat_res5": feat}
 
+        
 
 # PS_ARM
 class SimAM(torch.nn.Module):
@@ -498,3 +568,63 @@ class ARM_Mixer(nn.Module):
         embedding_rearrange = embedding.reshape(BB, CC,HH,WW)
         embedding_final = embedding_rearrange + self.simam(x)+x
         return embedding_final
+
+
+
+
+#FPN的类，
+class FPN(nn.Module):
+    def __init__(self,convnext):
+        super(FPN,self).__init__()
+        self.inplanes = 128
+
+        #处理输入的C1模块
+        self.inputLayer=convnext.features[0]#3 to 128
+        
+        #搭建自上而下的C2、C3、C4、C5
+        self.layer1 = convnext.features[1]#128 to 128 3
+        self.downsample2=convnext.features[2]
+        self.layer2 = convnext.features[3]#128 to 256 3
+        self.downsample3=convnext.features[4]
+        self.layer3 = convnext.features[5]#256 to 512 27
+        self.downsample4=convnext.features[6]
+        self.layer4 = convnext.features[7]#512 to 1024 3
+        
+
+        #对C5减少通道数得到P5
+        self.toplayer = nn.Conv2d(1024,512,1,1,0)
+
+        #3x3卷积融合特征
+        self.smooth1 = nn.Conv2d(512, 512, 3, 1, 1)
+        self.smooth2 = nn.Conv2d(512, 512, 3, 1, 1)
+        self.smooth3 = nn.Conv2d(512, 512, 3, 1, 1)
+
+        #横向连接，保证通道数相同
+        self.latlayer1 = nn.Conv2d(512,512,1,1,0)
+        self.latlayer2 = nn.Conv2d(256, 512, 1, 1, 0)
+        self.latlayer3 = nn.Conv2d(128, 512, 1, 1, 0)
+
+    def _upsample_add(self, x, y):
+        _,_,H,W = y.shape
+        return F.interpolate(x,size=(H,W),mode='bilinear',align_corners=False) + y
+
+    def forward(self,x):
+
+        # 自下而上
+        c1 = self.inputLayer(x.contiguous())#128
+        c2 = self.layer1(c1)#128
+        c3 = self.downsample2(self.layer2(c2).contiguous())#256
+        c4 = self.downsample3(self.layer3(c3).contiguous())#512
+        c5 = self.downsample4(self.layer4(c4).contiguous())#1024
+
+        #自上而下
+        p5 = self.toplayer(c5)#1024 512 256
+        p4 = self._upsample_add(p5.contiguous(), self.latlayer1(c4.contiguous()))
+        p3 = self._upsample_add(p4.contiguous(), self.latlayer2(c3.contiguous()))
+        p2 = self._upsample_add(p3.contiguous(), self.latlayer3(c2.contiguous()))
+
+        #卷积融合，平滑处理
+        p4 = self.smooth1(p4)
+        p3 = self.smooth2(p3)
+        p2 = self.smooth3(p2)
+        return p2, p3, p4, p5
