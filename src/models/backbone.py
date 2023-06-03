@@ -135,6 +135,40 @@ class fpnHead(Head):
         self.featmap_names = ['feat_res4', 'feat_res5']
         self.out_channels = [512,1024]
 
+#FPN的类，
+class fpnHead2(Head):
+    def __init__(self,convnext):
+        super().__init__()
+        self.downsample=copy.deepcopy(convnext.features[6])
+        self.layer = copy.deepcopy(convnext.features[7])#512 to 1024 3
+        #对C5减少通道数得到P5
+        self.toplayer = nn.Conv2d(1024,512,1,1,0)
+        #3x3卷积融合特征
+        self.smooth1 = nn.Conv2d(512, 1024, 3, 1, 1)
+        #横向连接，保证通道数相同
+        self.latlayer1 = nn.Conv2d(512,512,1,1,0)
+        self.featmap_names = ['feat_res4', 'feat_res5']
+        self.out_channels = [512,1024]
+        
+    def forward(self, x) -> Dict[str, Tensor]:
+        # print(x.shape) 1042 512 14 14
+        c5 = self.layer(self.downsample(x).contiguous())#1024
+        #自上而下
+        p5 = self.toplayer(c5)#1024 512 256
+        p4 = self._upsample_add(p5.contiguous(), self.latlayer1(x.contiguous()))
+        feat=self.smooth1(p4)
+        x = torch.amax(x, dim=(2, 3), keepdim=True)
+        feat = torch.amax(feat, dim=(2, 3), keepdim=True)
+        # print(feat.shape) torch.Size([1024, 1024, 1, 1])
+
+        return {"feat_res4": x, "feat_res5": feat}
+
+    def _upsample_add(self, x, y):
+        _,_,H,W = y.shape
+        # print(y.shape)
+        return F.interpolate(x,size=(H,W),mode='bilinear',align_corners=False).contiguous() + y
+    
+
 # Convnext Head
 class ConvnextV2Head(Head):
     def __init__(self, convnext):
@@ -217,7 +251,7 @@ def build_resnet(arch='resnet50', pretrained=True,
 def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True, user_arm_module=False):
     # weights
     weights = None
-
+    head=None
     # load model
     if arch == 'convnext_tiny':
         print('==> Backbone: ConvNext Tiny')
@@ -266,13 +300,14 @@ def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True, us
                 backbone, head = ConvnextBackbone(convnext), ConvnextHead(convnext)
                 if arch == 'convnext_fpn':
                     fpn= FPN(convnext)
-                    backbone, head = fpnBackbone(fpn), fpnHead(convnext)
+                    backbone, head = ConvnextBackbone(convnext), fpnHead2(convnext)
+                    head2=ConvnextHead(convnext)
             else:
                 convnext.features[0].requires_grad_(False)
                 backbone, head = ConvnextBackbone(convnext), ArmNextHead(convnext)
 
     # return backbone, head
-    return backbone, head
+    return backbone, head , head2
 
 
 
@@ -606,22 +641,23 @@ class FPN(nn.Module):
 
     def _upsample_add(self, x, y):
         _,_,H,W = y.shape
-        return F.interpolate(x,size=(H,W),mode='bilinear',align_corners=False) + y
+        print(y.shape)
+        return F.interpolate(x,size=(H,W),mode='bilinear',align_corners=False).contiguous() + y
 
     def forward(self,x):
 
         # 自下而上
-        c1 = self.inputLayer(x.contiguous())#128
+        c1 = self.inputLayer(x)#128
         c2 = self.layer1(c1)#128
-        c3 = self.downsample2(self.layer2(c2).contiguous())#256
-        c4 = self.downsample3(self.layer3(c3).contiguous())#512
-        c5 = self.downsample4(self.layer4(c4).contiguous())#1024
+        c3 = self.downsample2(self.layer2(c2))#256
+        c4 = self.downsample3(self.layer3(c3))#512
+        c5 = self.downsample4(self.layer4(c4))#1024
 
         #自上而下
         p5 = self.toplayer(c5)#1024 512 256
-        p4 = self._upsample_add(p5.contiguous(), self.latlayer1(c4.contiguous()))
-        p3 = self._upsample_add(p4.contiguous(), self.latlayer2(c3.contiguous()))
-        p2 = self._upsample_add(p3.contiguous(), self.latlayer3(c2.contiguous()))
+        p4 = self._upsample_add(p5, self.latlayer1(c4)).contiguous()
+        p3 = self._upsample_add(p4, self.latlayer2(c3)).contiguous()
+        p2 = self._upsample_add(p3, self.latlayer3(c2)).contiguous()
 
         #卷积融合，平滑处理
         p4 = self.smooth1(p4)

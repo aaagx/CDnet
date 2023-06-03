@@ -147,7 +147,7 @@ class SeqNeXt(nn.Module):
                 pretrained=config['pretrained'],
                 freeze_backbone_batchnorm=config['freeze_backbone_batchnorm'], freeze_layer1=config['freeze_layer1'],user_arm_module=config['user_arm_module'])
         elif config['model'] == 'convnext':
-            backbone, prop_head = build_convnext(arch=config['backbone_arch'],
+            backbone, prop_head ,prop_head2 = build_convnext(arch=config['backbone_arch'],
                 pretrained=config['pretrained'],
                 freeze_layer1=config['freeze_layer1'],user_arm_module=config['user_arm_module'])
         else:
@@ -189,11 +189,20 @@ class SeqNeXt(nn.Module):
 
         # Set up box predictors
         faster_rcnn_predictor = FastRCNNPredictor(box_channels, 2)
-        if(config['share_head']==True):
-            print("use share_head")
-            reid_head=prop_head
+
+        if(config["backbone_arch"]!='convnext_fpn'):
+            if(config['share_head']==True):
+                print("use share_head")
+                reid_head=prop_head
+            else:
+                reid_head = copy.deepcopy(prop_head)
         else:
-            reid_head = copy.deepcopy(prop_head)
+            if(config['share_head']==True):
+                print("use share_head")
+                reid_head=prop_head
+            else:
+                print("use head decouple")
+                reid_head = prop_head2
 
         # Set up RoI Align
         box_roi_pool = reid_roi_pool = MultiScaleRoIAlign(

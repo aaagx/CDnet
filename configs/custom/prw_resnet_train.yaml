@@ -20,7 +20,7 @@ decouple_mode: False
 model: 'convnext'
 backbone_arch: 'convnext_fpn'
 user_arm_module: False
-pretrained: False
+pretrained: True
 
 
 # GFN
@@ -31,7 +31,7 @@ use_gfn: False
 
 # Optimization
 epochs: 50
-batch_size: 5
+batch_size: 8
 # use_amp: False
 lr_steps: (20, 35)
 
@@ -47,5 +47,5 @@ ckpt_interval: 10
 log_dir: './logging'
 
 # box_head_mode: 'nae'
-share_head: True
+share_head: False
 debug: ~ 
