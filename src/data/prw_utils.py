@@ -11,7 +11,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
 # Local imports
-from . import coco_utils
+import coco_utils
 
 
 def _get_cam_id(img_name):
@@ -378,6 +378,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_dir', type=str, default='/datasets/prw')
     args = parser.parse_args() 
-
     # Build the COCO dataset for CUHK
     prw2coco(args.dataset_dir)
+    
+if __name__ == '__main__':
+    main()

@@ -1,30 +1,61 @@
 # Dataset
 dataset: 'prw'
-dataset_dir: '/datasets/prw'
+dataset_dir: '/home/lyh/dataset/PRW-v16.04.20'
 train_set: 'trainval'
 test_set: 'test'
-retrieval_name_list: ('test', 'cross_cam_id', 'same_cam_id')
+# retrieval_name_list: ('test', 'cross_cam_id', 'same_cam_id')
+retrieval_name_list: ('test','cross_cam_id','same_cam_id')
 
 # OIM
+oim_type: "LOIM" 
 oim_cq_size: 500
-
+### OIM LUT update momentum
+oim_momentum: 0.5
+### Inverse temperature parameter
+oim_scalar: 30.0
+emb_norm_type: 'protonorm'
+decouple_mode: False
 # Model
+# model: 'resnet'
+# backbone_arch: 'resnet50'
 model: 'convnext'
-backbone_arch: 'convnext_base'
-pretrained: False
+backbone_arch: 'convnext_fpn'
+user_arm_module: False
+pretrained: True
+
 
 # GFN
-gfn_mode: 'combined'
-gfn_query_mode: 'batch'
-gfn_scene_pool_size: 56
+use_gfn: False
+# gfn_mode: 'combined'
+# gfn_query_mode: 'batch'
+# gfn_scene_pool_size: 56
 
 # Optimization
-epochs: 30
-batch_size: 8
+epochs: 50
+batch_size: 7
+# use_amp: False
+lr_steps: (15, 25)
 
 # Augmentation
 aug_mode: 'rrc2'
 aug_crop_res: 640
+
+
+# Logging
+trial_name: 'prw_final'
+eval_interval: 1
+ckpt_interval: 10
+log_dir: './logging'
+
+# box_head_mode: 'nae'
+share_head: False
+debug: True
+pytorch.compile: False
+use_amp: True
+
+num_workers: 1
+num_cpus_per_trial: 10
+num_gpus_per_trial: 1
 
 # Run mode
 test_only: True
@@ -34,4 +65,4 @@ trial_name: 'prw_final'
 eval_interval: 30
 ckpt_interval: 30
 log_dir: './logging'
-ckpt_path: './ckpt/prw_final_convnext-base_e30.pt'
+ckpt_path: '/home/lyh/data/EDIT_NETWORK/logging/checkpoint.pkl'

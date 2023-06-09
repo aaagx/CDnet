@@ -271,8 +271,14 @@ def evaluate_detection_orig(partition_name, detection_lookup, image_lookup, quer
             good_det_embeddings = det_embeddings[det_mask]
             # Match detections with GT boxes
             match_quality_matrix = box_ops.box_iou(good_det_boxes, gt_boxes)
+            device=torch.device('cuda')
             det_idx, gt_idx = _match_boxes(match_quality_matrix.clone(), iou_thresh)
-            #
+
+            # print(det_idx.device)
+            # print(gt_idx.device)
+            det_idx=det_idx.to(device)
+            gt_idx=gt_idx.to(device)
+
             num_gt_match += gt_idx.shape[0]
             det_scores_list.append(good_det_scores)
             det_matches = torch.zeros(len(good_det_boxes))
@@ -280,6 +286,12 @@ def evaluate_detection_orig(partition_name, detection_lookup, image_lookup, quer
             det_matches_list.append(det_matches)
             # Store detected person_ids
             det_person_ids = torch.full((len(good_det_boxes),), -1, dtype=torch.long)
+
+            det_person_ids=det_person_ids.to(device)
+            gt_person_ids=gt_person_ids.to(device)
+            # print(det_person_ids.device)
+            # print(gt_person_ids.device)
+
             det_person_ids[det_idx] = gt_person_ids[gt_idx]
             # Compute cosine similarity used later for retrieval ranking
             ## We assume the embeddings are already normalized, and have other scores incorporated after normalization:

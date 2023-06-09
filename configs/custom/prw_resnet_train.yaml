@@ -1,10 +1,10 @@
 # Dataset
 dataset: 'prw'
-dataset_dir: '/home/ubuntu/datasets/PRW'
+dataset_dir: '/home/lyh/dataset/PRW-v16.04.20'
 train_set: 'trainval'
 test_set: 'test'
 retrieval_name_list: ('test',)
-workers: 8
+workers: 4
 # OIM
 oim_type: "LOIM"
 oim_cq_size: 500
@@ -33,7 +33,7 @@ use_gfn: False
 epochs: 50
 batch_size: 8
 # use_amp: False
-lr_steps: (20, 35)
+lr_steps: (15, 25)
 
 # Augmentation
 aug_mode: 'rrc2'
@@ -48,4 +48,10 @@ log_dir: './logging'
 
 # box_head_mode: 'nae'
 share_head: False
-debug: ~ 
+debug: False
+pytorch.compile: False
+use_amp: True
+
+num_workers: 1
+num_cpus_per_trial: 10
+num_gpus_per_trial: 1

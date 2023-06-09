@@ -3,3 +3,4 @@
 /logging/*
 /checkpoints/*
 /build/*
+*.pyc

@@ -46,6 +46,7 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
         print('==> Not using distributed: debug')
         rank = 0
     else:
+        # ray.init()
         print('==> Using distributed: train or test')
         rank = torch.distributed.get_rank()
         dist_utils.setup_for_distributed(rank == 0)
@@ -197,6 +198,7 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
 # Main function
 def main():
     # Parse args
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--default_config', default='./configs/default.yaml')
     parser.add_argument('--trial_config', default='./configs/default.yaml')
@@ -251,4 +253,5 @@ def main():
 
 # Run as module
 if __name__ == '__main__':
+    torch.multiprocessing.set_sharing_strategy('file_system')
     main()

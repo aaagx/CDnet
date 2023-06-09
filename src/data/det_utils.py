@@ -118,6 +118,7 @@ class TestSampler(torch.utils.data.Sampler):
             query_id_set, image_id_set = set(), set()
             for retrieval_name in retrieval_name_list:
                 retrieval_path = os.path.join(retrieval_dir, '{}.json'.format(retrieval_name))
+                print(retrieval_path)
                 with open(retrieval_path, 'r') as fp:
                     retrieval_dict = json.load(fp)
                     _image_id_set = set(retrieval_dict['images'])
