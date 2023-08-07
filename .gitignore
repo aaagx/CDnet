@@ -4,3 +4,5 @@
 /checkpoints/*
 /build/*
 *.pyc
+/notebook/*.pt
+*lookup

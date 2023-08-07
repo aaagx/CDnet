@@ -138,6 +138,8 @@ def get_test_loader(config):
         test_transform = transform.get_transform_rrc(train=False, stat_dict=stat_dict)
     elif config['aug_mode'] == 'rrc2':
         test_transform = transform.get_transform_rrc2(train=False, stat_dict=stat_dict)
+    elif config['aug_mode'] == 'rrc3':
+        test_transform = transform.get_transform_rrc3(train=False, stat_dict=stat_dict)
 
     # Get dataset
     test_dataset, _ = det_utils.get_coco(
@@ -179,6 +181,10 @@ def get_train_loader(config):
             rbsc_er=config['aug_rbsc_er'], crop_res=config['aug_crop_res'])
     elif config['aug_mode'] == 'rrc2':
         train_transform = transform.get_transform_rrc2(train=True, stat_dict=stat_dict,
+            rfc_prob=config['aug_rfc_prob'], rsc_prob=config['aug_rsc_prob'],
+            rbsc_er=config['aug_rbsc_er'], crop_res=config['aug_crop_res'])
+    elif config['aug_mode'] == 'rrc3':
+        train_transform = transform.get_transform_rrc3(train=True, stat_dict=stat_dict,
             rfc_prob=config['aug_rfc_prob'], rsc_prob=config['aug_rsc_prob'],
             rbsc_er=config['aug_rbsc_er'], crop_res=config['aug_crop_res'])
 

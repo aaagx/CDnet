@@ -242,6 +242,7 @@ class GalleryFilterNetwork(nn.Module):
         gfn_met_known_tsr = torch.BoolTensor([is_known_dict[l] for l in gfn_met_label_tsr.tolist()]).to(self.device)
 
         # Extract GT query features
+
         query_features = self.query_roi_pool(features, boxes, image_shapes)
         query_features = self.query_reid_head(query_features)
         query_emb, _ = self.query_emb_head(query_features)

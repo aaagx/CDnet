@@ -110,7 +110,7 @@ def get_transform_rrc2(train, stat_dict, min_size=900, max_size=1500, crop_res=5
                 albu_fork.RandomFocusedCrop2(height=crop_res, width=crop_res, p=rfc_prob),
                 albu.RandomSizedBBoxSafeCrop(crop_res, crop_res, erosion_rate=rbsc_er, interpolation=1, p=rsc_prob),
             ], p=1),
-            albu.HorizontalFlip(p=0.5),
+            albu.HorizontalFlip(p=0.5)
         ]
     albu_transform = albu.Compose(transform_list,
         bbox_params=albu.BboxParams(
@@ -134,6 +134,36 @@ def get_transform_wrs(train, stat_dict, min_size=900, max_size=1500):
         bbox_params=albu.BboxParams(
             format='coco', label_fields=['category_ids', 'person_id', 'id', 'iou_thresh', 'is_known'],
             min_visibility=0.4,
+        )
+    )    
+    albu_transform_dict = {'test': albu_transform}
+    return AlbuWrapper(albu_transform, stat_dict)
+
+
+# Random Resized Crop augmentation
+def get_transform_rrc3(train, stat_dict, min_size=900, max_size=1500, crop_res=512,
+        rfc_prob=1.0, rsc_prob=1.0, rbsc_er=0.0):
+    transform_list = [albu_fork.WindowResize(min_size=min_size, max_size=max_size)] 
+    if train:
+        # Calculate padding value
+        mean_arr = np.array(stat_dict['mean'])
+        std_arr = np.array(stat_dict['std'])
+        pad_arr = - mean_arr / std_arr
+        #
+        transform_list = [
+            albu_fork.WindowResize(min_size=min_size, max_size=max_size),
+            albu.PadIfNeeded(min_width=3*crop_res, min_height=3*crop_res, border_mode=cv2.BORDER_CONSTANT, value=pad_arr),
+            albu.OneOf([
+                albu_fork.RandomFocusedCrop2(height=crop_res, width=crop_res, p=rfc_prob),
+                albu.RandomSizedBBoxSafeCrop(crop_res, crop_res, erosion_rate=rbsc_er, interpolation=1, p=rsc_prob),
+            ], p=1),
+            albu.HorizontalFlip(p=0.5),
+            albu.ToGray(p=0.3)
+        ]
+    albu_transform = albu.Compose(transform_list,
+        bbox_params=albu.BboxParams(
+            format='coco', label_fields=['category_ids', 'person_id', 'id', 'iou_thresh', 'is_known'],
+            min_visibility=0.6,
         )
     )    
     albu_transform_dict = {'test': albu_transform}

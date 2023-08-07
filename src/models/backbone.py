@@ -25,6 +25,7 @@ from torch import Tensor
 import sys
 sys.path.append("./src")
 from models.convnextV2 import ConvNeXtV2,load_convnextV2
+from models.inceptionNext import inceptionnext_base
 
 
 # Legacy resnet50 backbone
@@ -144,24 +145,27 @@ class fpnHead2(Head):
         #对C5减少通道数得到P5
         self.toplayer = nn.Conv2d(1024,512,1,1,0)
         #3x3卷积融合特征
-        self.smooth1 = nn.Conv2d(512, 1024, 3, 1, 1)
+        self.smooth1 = nn.Conv2d(512, 512, 3, 1, 1)
         #横向连接，保证通道数相同
         self.latlayer1 = nn.Conv2d(512,512,1,1,0)
         self.featmap_names = ['feat_res4', 'feat_res5']
         self.out_channels = [512,1024]
         
-    def forward(self, x) -> Dict[str, Tensor]:
+    # def forward(self, x) -> Dict[str, Tensor]:
+    def forward(self, x):
         # print(x.shape) 1042 512 14 14
         c5 = self.layer(self.downsample(x).contiguous())#1024
         #自上而下
         p5 = self.toplayer(c5)#1024 512 256
         p4 = self._upsample_add(p5.contiguous(), self.latlayer1(x.contiguous()))
         feat=self.smooth1(p4)
-        x = torch.amax(x, dim=(2, 3), keepdim=True)
-        feat = torch.amax(feat, dim=(2, 3), keepdim=True)
+        # x = torch.amax(x, dim=(2, 3), keepdim=True)
+        # feat = torch.amax(feat, dim=(2, 3), keepdim=True)
         # print(feat.shape) torch.Size([1024, 1024, 1, 1])
 
-        return {"feat_res4": x, "feat_res5": feat}
+        # return {"feat_res4": x, "feat_res5": feat}
+        # print(feat.shape)
+        return feat
 
     def _upsample_add(self, x, y):
         _,_,H,W = y.shape
@@ -200,8 +204,32 @@ class ConvnextV2Backbone(Backbone):
         ), return_layers=return_layers)
         self.out_channels = convnext.stages[2][-1].pwconv2.out_features
 
+class inceptionHead(Head):
+    def __init__(self, convnext):
+        super().__init__()
+        self.head = nn.Sequential(
+            convnext.stages[3],
+        )
+        self.out_channels = [
+            512,
+            1024
+        ]
+        print(self.out_channels)
+        self.featmap_names = ['feat_res4', 'feat_res5']
 
-
+class inceptionBackbone(Backbone):
+    def __init__(self, convnext):
+        super().__init__()
+        return_layers = {
+            '3': 'feat_res4',
+        }
+        self.body= IntermediateLayerGetter(
+                    nn.Sequential(convnext.stem
+                                ,convnext.stages[0]
+                                ,convnext.stages[1]
+                                ,convnext.stages[2]),return_layers)
+        self.out_channels = 512
+        
 # Convnext Head
 class ConvnextHead(Head):
     def __init__(self, convnext):
@@ -284,24 +312,32 @@ def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True, us
          if pretrained:
             weights = torchvision.models.ConvNeXt_Base_Weights.IMAGENET1K_V1
          convnext = torchvision.models.convnext_base(weights=weights)
+    elif arch == 'inceptionNext':
+        if pretrained:
+            print('==> Backbone: inceptionNext pretrained')
+            convnext=inceptionnext_base(True)
     else:
         raise NotImplementedError
 
     
     # freeze first layer
     
+    head2=None
     if freeze_layer1:
         if arch == 'convnextV2_base':
             convnext.downsample_layers.requires_grad_(False)
             backbone, head = ConvnextV2Backbone(convnext), ConvnextV2Head(convnext)
+        elif arch == 'inceptionNext':
+            convnext.stem.requires_grad_(False)
+            backbone, head=inceptionBackbone(convnext),inceptionHead(convnext)
         else:
             if user_arm_module == False:
                 convnext.features[0].requires_grad_(False)
                 backbone, head = ConvnextBackbone(convnext), ConvnextHead(convnext)
                 if arch == 'convnext_fpn':
                     fpn= FPN(convnext)
-                    backbone, head = ConvnextBackbone(convnext), fpnHead2(convnext)
-                    head2=ConvnextHead(convnext)
+                    backbone, head = ConvnextBackbone(convnext), ConvnextHead(convnext)
+                    head2=fpnHead2(convnext)
             else:
                 convnext.features[0].requires_grad_(False)
                 backbone, head = ConvnextBackbone(convnext), ArmNextHead(convnext)

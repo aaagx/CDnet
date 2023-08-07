@@ -27,6 +27,7 @@ import dist_utils
 from train import train_one_epoch
 import evaluate
 import utils as engine_utils
+from Adam import AdamW_GC2
 
 
 def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
@@ -96,6 +97,8 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
             params, lr=config['optimizer'][1], momentum=0.9, weight_decay=5e-4)
     elif config['optimizer'][0] == 'adam':
         optimizer = torch.optim.Adam(params, lr=config['optimizer'][1])
+    elif config['optimizer'][0] == 'AdamW_GC2':
+        optimizer = AdamW_GC2(params,lr=config['optimizer'][1])
     else:
         raise Exception
 
@@ -111,7 +114,7 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
         report_dict = {
             'epoch': epoch,
         }
-
+        
         # Set scheduler
         if (config['scheduler'] in ('onecycle', 'cosine')) and epoch == 0:
             if config['scheduler'] == 'onecycle':
@@ -122,34 +125,22 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
                 print('==> Using CosineAnnealing scheduler')
                 lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
                     T_max=len(train_loader)*config['epochs'])
-
+        
         # Train for one epoch
         metric_logger = train_one_epoch(model, optimizer, train_loader,
             device, epoch, config['print_freq'], optimizer_type=config['optimizer'][0],
             warmup=config['use_warmup'],
             use_amp=config['use_amp'], clip_grads=config['clip_grads'],
             lr_scheduler=lr_scheduler if (config['scheduler'] in ('onecycle', 'cosine')) else None)
+        torch.cuda.empty_cache()
 
         # Step the scheduler
         if (config['scheduler'] not in ('onecycle', 'cosine')) and (lr_scheduler is not None):
             lr_scheduler.step()
         report_dict.update(metric_logger.get_dict())
 
-        # Run detection evaluation every test_eval_interval epochs
-        if (((epoch + 1) % config['eval_interval']) == 0):
 
-            metric_dict = {}
-            try:
-                _metric_dict, _ = evaluate.evaluate_performance(model, test_loader, device,
-                    use_amp=config['use_amp'],
-                    use_gfn=config['use_gfn'], gfn_mode=config['gfn_mode']) 
-                metric_dict.update(_metric_dict)
-            except RuntimeError:
-                raise
-            else:
-                report_dict.update(metric_dict)
-
-        # Checkpoint
+                # Checkpoint
         if ((epoch + 1) % config['ckpt_interval'] == 0) and (epoch > 0):
             if config['debug']:
                 ckpt_path = os.path.join('debug_ckpt', '{}_debug_checkpoint_e{}.pkl'.format(config['dataset'], epoch))
@@ -186,6 +177,25 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
                                     shutil.rmtree(_worker_dir)
                                 elif int(old_epoch_str) < (epoch - 2):
                                     shutil.rmtree(_worker_dir)
+                    torch.cuda.empty_cache()
+
+
+        # Run detection evaluation every test_eval_interval epochs
+        if (((epoch + 1) % config['eval_interval']) == 0):
+            torch.cuda.empty_cache()
+            metric_dict = {}
+            try:
+                _metric_dict, _ = evaluate.evaluate_performance(model, test_loader, device,
+                    use_amp=config['use_amp'],
+                    use_gfn=config['use_gfn'], gfn_mode=config['gfn_mode']) 
+                metric_dict.update(_metric_dict)
+            except RuntimeError:
+                raise
+            else:
+                report_dict.update(metric_dict)
+            torch.cuda.empty_cache()
+
+
             
         # Report final results for the epoch
         if config['debug']:

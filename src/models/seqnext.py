@@ -14,6 +14,7 @@ from torchvision.models.detection.roi_heads import RoIHeads
 from torchvision.models.detection.rpn import AnchorGenerator, RegionProposalNetwork, RPNHead
 from torchvision.ops import MultiScaleRoIAlign
 from torchvision.ops import boxes as box_ops
+from torchvision.ops import PSRoIAlign
 # typing
 from typing import Dict, Tuple, List, Any, Optional
 from torch import Tensor
@@ -29,6 +30,7 @@ from models.gfn import GalleryFilterNetwork
 from losses.oim_loss import OIMLossSafe
 from losses.oim_loss import LOIMLossSafe
 from losses.protoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
+from losses.MultiScalePSRoiAlign import MultiScale_PS_RoIAlign
 
 
 class SafeBatchNorm1d(nn.BatchNorm1d):
@@ -166,6 +168,9 @@ class SeqNeXt(nn.Module):
             num_anchors=anchor_generator.num_anchors_per_location()[0],
             conv_depth=rpn_conv_depth,
         )
+        if(config["backbone_arch"]=='convnext_fpn'):
+            head.conv=prop_head2
+        
         pre_nms_top_n = dict(
             training=config['rpn_pre_nms_topn_train'], testing=config['rpn_pre_nms_topn_test']
         )
@@ -190,22 +195,29 @@ class SeqNeXt(nn.Module):
         # Set up box predictors
         faster_rcnn_predictor = FastRCNNPredictor(box_channels, 2)
 
-        if(config["backbone_arch"]!='convnext_fpn'):
-            if(config['share_head']==True):
-                print("use share_head")
-                reid_head=prop_head
-            else:
-                reid_head = copy.deepcopy(prop_head)
+        if(config['share_head']==True):
+            print("use share_head")
+            reid_head=prop_head
         else:
-            if(config['share_head']==True):
-                print("use share_head")
-                reid_head=prop_head
-            else:
-                print("use head decouple")
-                reid_head = prop_head2
+            reid_head = copy.deepcopy(prop_head)
 
+        if('ps_roi_align' in config.keys()):
+            if(config['ps_roi_align']==True):
+                print("user ps_RoiAlign")
+                box_roi_pool  = MultiScale_PS_RoIAlign(
+                        featmap_names=["feat_res4"], output_size=14, sampling_ratio=2
+                        ) 
+                reid_roi_pool = MultiScaleRoIAlign(
+                        featmap_names=["feat_res4"], output_size=14, sampling_ratio=2
+                        ) 
+            else:
+            # Set up RoI Align
+                box_roi_pool = reid_roi_pool = MultiScaleRoIAlign(
+                featmap_names=["feat_res4"], output_size=14, sampling_ratio=2
+        )
+        else:
         # Set up RoI Align
-        box_roi_pool = reid_roi_pool = MultiScaleRoIAlign(
+            box_roi_pool = reid_roi_pool = MultiScaleRoIAlign(
             featmap_names=["feat_res4"], output_size=14, sampling_ratio=2
         )
         box_head = reid_head
@@ -219,7 +231,7 @@ class SeqNeXt(nn.Module):
 
         embedding_head_decouple = NormAwareEmbedding(
             featmap_names=featmap_names, in_channels=in_channels, dim=config['emb_dim'],
-                norm_type=config['emb_norm_type']) 
+                norm_type='batchnorm') 
                
         if config['box_head_mode'] == 'rcnn':
             embedding_head.rescaler = None
@@ -241,7 +253,7 @@ class SeqNeXt(nn.Module):
         if self.use_gfn:
             ## Build Gallery Filter Network
             self.gfn = GalleryFilterNetwork(reid_roi_pool, reid_head,
-                embedding_head, mode=config['gfn_mode'],
+                embedding_head_decouple, mode=config['gfn_mode'],
                 gfn_activation_mode=config['gfn_activation_mode'],
                 emb_dim=config['emb_dim'], temp=config['gfn_train_temp'], se_temp=config['gfn_se_temp'],
                 filter_neg=config['gfn_filter_neg'],
@@ -294,6 +306,9 @@ class SeqNeXt(nn.Module):
             emb_dim=config['emb_dim'],
             box_head_mode=config['box_head_mode'],
             box_channels=box_channels,
+            #loss
+            focal_loss=config['focal_loss'],
+            l1_loss_focal=config['l1_loss_focal']
         )
 
         # batch and pad images
@@ -343,6 +358,7 @@ class SeqNeXt(nn.Module):
         if (inference_mode in ('det', 'both')) or (inference_mode in ('gt', 'both')):
             # gallery
             rpn_features = bb_features
+            # rpn_features =rpn_features.to_sparse()
             proposals, _ = self.rpn(images, rpn_features, targets)
             detections, _ = self.roi_heads(
                 bb_features, proposals, images.image_sizes, targets
@@ -360,7 +376,7 @@ class SeqNeXt(nn.Module):
             'gt_emb': e,
             'scene_emb': s,
         } for d, e, s in zip(detections, embeddings, scene_emb)]
-
+        # print(output_list)
         # Return output
         return output_list
 
@@ -381,6 +397,9 @@ class SeqNeXt(nn.Module):
         # RPN
         rpn_features = bb_features
         # print(bb_features)
+        # print(rpn_features.shape)
+        # rpn_features =rpn_features.to_sparse()
+        # print(rpn_features.shape)
         proposals, proposal_losses = self.rpn(images, rpn_features, targets)
         _, detector_losses = self.roi_heads(bb_features, proposals, images.image_sizes, targets)
 
@@ -427,6 +446,8 @@ class SeqRoIHeads(RoIHeads):
         box_channels=None,
         det_score='scs',
         cws_score='scs',
+        focal_loss=False,
+        l1_loss_focal=False,
         *args,
         **kwargs
     ):
@@ -454,6 +475,12 @@ class SeqRoIHeads(RoIHeads):
         self.gfn_use_image_lut = gfn_use_image_lut
         self.box_head_mode = box_head_mode
         self.oim_type=oim_type
+        if(focal_l1_loss):
+            print("use focal L1 loss")
+        self.focal_loss=focal_loss
+        if(focal_loss):
+            print("use focal loss")
+        self.l1_loss_focal=l1_loss_focal
 
         if self.box_head_mode == 'rcnn':
             self.score_predictor = FastRCNNPredictor(box_channels, 1)
@@ -537,7 +564,7 @@ class SeqRoIHeads(RoIHeads):
             box_labels = [torch.empty(0)]
 
         ###
-        box_features = self.box_roi_pool(bb_features, reg_boxes, image_shapes)
+        box_features = self.reid_roi_pool(bb_features, reg_boxes, image_shapes)
         # print(box_labels)
         if self.training: 
             register_targets_for_pn(self.box_head, torch.cat(box_labels).long())
@@ -576,6 +603,8 @@ class SeqRoIHeads(RoIHeads):
                 box_regs,
                 box_labels,
                 box_reg_targets,
+                self.focal_loss,
+                self.l1_loss_focal
             )
             # Reid loss
             _box_pid_labels = torch.cat(box_pid_labels)
@@ -949,6 +978,66 @@ class BBoxRegressor(nn.Module):
         bbox_deltas = self.bbox_pred(x)
         return bbox_deltas
 
+def sigmoid_focal_loss(
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    alpha: float = 0.6,
+    gamma: float = 2,
+    reduction: str = "none",
+) -> torch.Tensor:
+    """
+    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+        alpha: (optional) Weighting factor in range (0,1) to balance
+                positive vs negative examples. Default = -1 (no weighting).
+        gamma: Exponent of the modulating factor (1 - p_t) to
+               balance easy vs hard examples.
+        reduction: 'none' | 'mean' | 'sum'
+                 'none': No reduction will be applied to the output.
+                 'mean': The output will be averaged.
+                 'sum': The output will be summed.
+    Returns:
+        Loss tensor with the reduction option applied.
+    """
+    inputs = inputs.float()  # (B, C)
+    targets = targets.float()  # (B, C)
+    p = torch.sigmoid(inputs)  # (B, C)
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none") # (B, C)
+    p_t = p * targets + (1 - p) * (1 - targets)
+    loss = ce_loss * ((1 - p_t) ** gamma)  # (B, C)
+
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets) # # (B, C)
+        loss = alpha_t * loss # (B, C)
+
+    if reduction == "mean":
+        loss = loss.mean()
+    elif reduction == "sum":
+        loss = loss.sum()
+
+    return loss
+
+def focal_l1_loss(predictions, targets, beta = 0.5):
+    
+    loss = 0
+    alpha=math.e*beta
+    C=(2*alpha*math.log(beta)+alpha)/4
+    diff = (predictions-targets).abs()
+    mask = (diff < beta)
+
+    # print(mask)
+    loss += mask*(-alpha*diff**2*(2*torch.log(beta*diff)-1) / 4)
+    loss[torch.isnan(loss)]=0
+    # print(loss)
+    loss += (~mask)*(-alpha*math.log(beta)*diff+C)
+    # print(loss)
+
+    return loss
 
 def detection_losses(
     proposal_cls_scores: Tensor,
@@ -959,15 +1048,23 @@ def detection_losses(
     box_regs: Tensor,
     box_labels: List[Tensor],
     box_reg_targets: List[Tensor],
+    focal_loss=False,
+    l1_loss_focal=False
 ) -> Dict[str, Tensor]:
     proposal_labels = torch.cat(proposal_labels, dim=0)
     box_labels = torch.cat(box_labels, dim=0)
     proposal_reg_targets = torch.cat(proposal_reg_targets, dim=0)
     box_reg_targets = torch.cat(box_reg_targets, dim=0)
 
+
     _loss_proposal_cls = F.cross_entropy(proposal_cls_scores, proposal_labels, reduction='none')
     loss_proposal_cls = (_loss_proposal_cls / _loss_proposal_cls.size(0)).sum()
-    _loss_box_cls = F.binary_cross_entropy_with_logits(box_cls_scores, box_labels.float(), reduction='none')
+
+    if(focal_loss):
+        _loss_box_cls=sigmoid_focal_loss(box_cls_scores,box_labels.float(), reduction='none')
+
+    else:
+        _loss_box_cls = F.binary_cross_entropy_with_logits(box_cls_scores, box_labels.float(), reduction='none')
     loss_box_cls = (_loss_box_cls / _loss_box_cls.size(0)).sum()
 
     # get indices that correspond to the regression targets for the
@@ -977,11 +1074,21 @@ def detection_losses(
     N = proposal_cls_scores.size(0)
     proposal_regs = proposal_regs.reshape(N, -1, 4)
 
-    loss_proposal_reg = F.smooth_l1_loss(
-        proposal_regs[sampled_pos_inds_subset, labels_pos],
-        proposal_reg_targets[sampled_pos_inds_subset],
-        reduction="none",
-    )
+    
+    if(l1_loss_focal):
+        loss_proposal_reg = focal_l1_loss(
+                proposal_regs[sampled_pos_inds_subset, labels_pos],
+                proposal_reg_targets[sampled_pos_inds_subset],
+                beta=0.5
+            )
+    else:
+        loss_proposal_reg = F.smooth_l1_loss(
+                proposal_regs[sampled_pos_inds_subset, labels_pos],
+                proposal_reg_targets[sampled_pos_inds_subset],
+                reduction="none",
+            )
+
+    
     loss_proposal_reg = (loss_proposal_reg / proposal_labels.numel()).sum()
 
     sampled_pos_inds_subset = torch.nonzero(box_labels > 0).squeeze(1)
@@ -989,11 +1096,18 @@ def detection_losses(
     N = box_cls_scores.size(0)
     box_regs = box_regs.reshape(N, -1, 4)
 
-    loss_box_reg = F.smooth_l1_loss(
-        box_regs[sampled_pos_inds_subset, labels_pos],
-        box_reg_targets[sampled_pos_inds_subset],
-        reduction="none",
-    )
+    if(l1_loss_focal):
+         loss_box_reg = focal_l1_loss(
+            box_regs[sampled_pos_inds_subset, labels_pos],
+            box_reg_targets[sampled_pos_inds_subset],
+            beta=0.5
+        )
+    else:
+        loss_box_reg = F.smooth_l1_loss(
+            box_regs[sampled_pos_inds_subset, labels_pos],
+            box_reg_targets[sampled_pos_inds_subset],
+            reduction="none",
+        )
     loss_box_reg = (loss_box_reg / box_labels.numel()).sum()
 
     return dict(
