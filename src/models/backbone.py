@@ -18,6 +18,7 @@ import math
 from torch import Tensor
 from torch.nn import init
 from torch.nn.modules.utils import _pair
+from mmcv.ops.carafe import CARAFEPack
 
 ## Types
 from typing import Dict
@@ -26,6 +27,10 @@ import sys
 sys.path.append("./src")
 from models.convnextV2 import ConvNeXtV2,load_convnextV2
 from models.inceptionNext import inceptionnext_base
+from losses.gem import GeM
+from models.stegFormer import RestormerBlock
+from models.stegFormer import to_4d
+from models.stegFormer import to_3d
 
 
 # Legacy resnet50 backbone
@@ -108,6 +113,7 @@ class ConvnextBackbone(Backbone):
         super().__init__()
         return_layers = {
             '5': 'feat_res4',
+
         }
         self.body = IntermediateLayerGetter(convnext.features, return_layers=return_layers)
         self.out_channels = convnext.features[5][-1].block[5].out_features
@@ -116,25 +122,35 @@ class fpnBackbone(Backbone):
     def __init__(self,fpn):
         super().__init__()
         return_layers = {
-            'smooth1': 'feat_res4',
+            'downsample3': 'feat_res4',
+            'downsample4': 'feat_res3',
+            'downsample2': 'feat_res2',
         }
         self.body= IntermediateLayerGetter(fpn, return_layers=return_layers)
         self.out_channels = 512
+    def forward(self, x):
+        y = self.body(x)
+        return y
 
 
 class fpnHead(Head):
-     def __init__(self,convnext):
+    def __init__(self, fpn):
         super().__init__()
         self.head = nn.Sequential(
-            copy.deepcopy(convnext.features[6]),
-            copy.deepcopy(convnext.features[7]),
+            fpn.downsample4,
+            fpn.layer4,
         )
-        # self.out_channels = [
-        #     convnext.features[5][-1].block[5].out_features,#512
-        #     convnext.features[7][-1].block[5].out_features,#1024
-        # ]
+        self.out_channels = [
+            512,#512
+            1024,#1024
+        ]
         self.featmap_names = ['feat_res4', 'feat_res5']
-        self.out_channels = [512,1024]
+
+    def forward(self, x) -> Dict[str, Tensor]:
+        feat = self.head(x)
+        x = torch.amax(x, dim=(2, 3), keepdim=True)
+        feat = torch.amax(feat, dim=(2, 3), keepdim=True)
+        return {"feat_res4": x, "feat_res5": feat} 
 
 #FPN的类，
 class fpnHead2(Head):
@@ -153,6 +169,7 @@ class fpnHead2(Head):
         
     # def forward(self, x) -> Dict[str, Tensor]:
     def forward(self, x):
+
         # print(x.shape) 1042 512 14 14
         c5 = self.layer(self.downsample(x).contiguous())#1024
         #自上而下
@@ -244,6 +261,33 @@ class ConvnextHead(Head):
         ]
         self.featmap_names = ['feat_res4', 'feat_res5']
 
+
+class ConvnextHead_gem(Head):
+    def __init__(self, convnext):
+        super().__init__()
+        self.head = nn.Sequential(
+            convnext.features[6],
+            convnext.features[7],
+        )
+        self.out_channels = [
+            convnext.features[5][-1].block[5].out_features,#512
+            convnext.features[7][-1].block[5].out_features,#1024
+        ]
+        self.featmap_names = ['feat_res4', 'feat_res5']
+        self.GeMpool=GeM()
+
+
+    def forward(self, x) -> Dict[str, Tensor]:
+        feat = self.head(x)
+        x = self.GeMpool(x)
+        feat = self.GeMpool(feat)
+        # print(x)
+        # print(feat)
+        return {"feat_res4": x, "feat_res5": feat}
+
+
+
+            
 # resnet model builder function
 def build_resnet(arch='resnet50', pretrained=True,
         freeze_backbone_batchnorm=True, freeze_layer1=True,
@@ -254,6 +298,9 @@ def build_resnet(arch='resnet50', pretrained=True,
     else:
         weights = None
 
+    head4=None
+    head2=None
+    head3=None
     # load model
     if freeze_backbone_batchnorm:
         resnet = torchvision.models.resnet50(weights=weights, norm_layer=norm_layer)
@@ -271,12 +318,17 @@ def build_resnet(arch='resnet50', pretrained=True,
         backbone, head = ResnetBackbone(resnet), ResnetHead(resnet)
     else:
         backbone, head = ResnetBackbone(resnet), ArmRes5Head(resnet)
+        head2=ResnetHead(resnet)
+        head3=ArmRes5Head(resnet)
+        head4=ArmRes5Head(resnet)
+       
     # return backbone, head
-    return backbone, head
+
+    return backbone, head,head2,head3,head4
 
 
 # convnext model builder function
-def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True, user_arm_module=False):
+def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True, user_arm_module=False,use_gem=False):
     # weights
     weights = None
     head=None
@@ -321,8 +373,10 @@ def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True, us
 
     
     # freeze first layer
-    
+    head3=None
     head2=None
+    head4=None
+    fpn=None
     if freeze_layer1:
         if arch == 'convnextV2_base':
             convnext.downsample_layers.requires_grad_(False)
@@ -333,29 +387,44 @@ def build_convnext(arch='convnext_base', pretrained=True, freeze_layer1=True, us
         else:
             if user_arm_module == False:
                 convnext.features[0].requires_grad_(False)
-                backbone, head = ConvnextBackbone(convnext), ConvnextHead(convnext)
+                backbone= ConvnextBackbone(convnext)
+                if use_gem :
+                    print("use gem head to detect")
+                    head= ConvnextHead_gem(convnext)
+                    print("use arm head to get re_id feature")
+                    head3=ArmNextHead(convnext,use_gem=False)
+                    print("use decouple head to two stage detect")
+                    head4=copy.deepcopy(head)
+                else:
+                    print("use normal head to detect")
+                    head=ConvnextHead(convnext)
+                    print('use arm head to get re_id feature')
+                    head3=ArmNextHead(convnext)
+                    print('use noraml head to get scene feature')
+                    head4=None
                 if arch == 'convnext_fpn':
-                    fpn= FPN(convnext)
-                    backbone, head = ConvnextBackbone(convnext), ConvnextHead(convnext)
+                    # fpn=FPN(convnext)
                     head2=fpnHead2(convnext)
+                
+
             else:
                 convnext.features[0].requires_grad_(False)
                 backbone, head = ConvnextBackbone(convnext), ArmNextHead(convnext)
 
     # return backbone, head
-    return backbone, head , head2
+    return backbone, head , head2, head3,head4,fpn
 
 
 
 
 
 class ArmRes5Head(Head):
-    def __init__(self, resnet):
+    def __init__(self, resnet,image_size=14):
         super().__init__()
-        self.head = resnet.layer4
+        self.head = copy.deepcopy(resnet.layer4)
         self.out_channels = [1024, 2048]
         self.featmap_names = ['feat_res4', 'feat_res5']
-        self.mlP_model = ARM_Mixer(in_channels=256, image_size=14, patch_size=1)
+        self.mlP_model = ARM_Mixer(in_channels=256, image_size=image_size, patch_size=1)
         self.qconv1 = nn.Conv2d(in_channels=1024, out_channels=256, kernel_size=1)
         self.qconv2 = nn.Conv2d(in_channels=256, out_channels=1024, kernel_size=1)
         
@@ -371,35 +440,75 @@ class ArmRes5Head(Head):
         return {"feat_res4": x, "feat_res5": feat}
 
 class ArmNextHead(Head):
-    def __init__(self, convnext):
+    def __init__(self, convnext,image_size=14,patch_size=1,use_gem=False):
         super().__init__()
         self.head = nn.Sequential(
-            convnext.features[6],
-            convnext.features[7],
+            copy.deepcopy(convnext.features[6]),
+            copy.deepcopy(convnext.features[7]),
         )
         self.out_channels = [
             convnext.features[5][-1].block[5].out_features,
             convnext.features[7][-1].block[5].out_features,
         ]
         self.featmap_names = ['feat_res4', 'feat_res5']
-        self.inconv=nn.Conv2d(in_channels=512,out_channels=1042,kernel_size=1)
-        self.mlP_model = ARM_Mixer(in_channels=256, image_size=14, patch_size=1)
-        self.qconv1 = nn.Conv2d(in_channels=1024, out_channels=256, kernel_size=1)
-        self.qconv2 = nn.Conv2d(in_channels=256, out_channels=1024, kernel_size=1)
-        self.outconv=nn.Conv2d(in_channels=1024,out_channels=512,kernel_size=1)
+        
+        self.mlP_model = ARM_Mixer(in_channels=256, image_size=image_size, patch_size=1)
+        self.qconv1 = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=1)
+        self.qconv2 = nn.Conv2d(in_channels=256, out_channels=512, kernel_size=1)
+        if use_gem:
+            self.GeMpool=GeM()
+            self.use_gem=True
+        else:
+            self.use_gem=False
+
         
     def forward(self, x) -> Dict[str, Tensor]:
         #print(x.shape)
-        x=self.inconv(x)
+        # x=self.inconv(x)
         qconv1 = self.qconv1(x)
         x_sc_mlp_feat=self.mlP_model(qconv1)
         qconv2 = self.qconv2(x_sc_mlp_feat)
-        qconv2=self.outconv(qconv2)
+        # qconv2=self.outconv(qconv2)
+        feat = self.head(qconv2)
+        if self.use_gem:
+            qconv2 = self.GeMpool(qconv2)
+            feat = self.GeMpool(feat) 
+        else:
+            qconv2 = torch.amax(qconv2, dim=(2, 3), keepdim=True)
+            feat = torch.amax(feat, dim=(2, 3), keepdim=True)
+        return {"feat_res4": qconv2, "feat_res5": feat}
+
+
+
+
+class SceneNextHead(Head):
+    def __init__(self, convnext):
+        super().__init__()
+        self.head = nn.Sequential(
+            copy.deepcopy(convnext.features[6]),
+            copy.deepcopy(convnext.features[7]),
+        )
+        self.out_channels = [
+            convnext.features[5][-1].block[5].out_features,
+            convnext.features[7][-1].block[5].out_features,
+        ]
+        self.featmap_names = ['feat_res4', 'feat_res5']
+        
+        self.mlP_model = ARM_Mixer(in_channels=256, image_size=56, patch_size=1)
+        self.qconv1 = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=1)
+        self.qconv2 = nn.Conv2d(in_channels=256, out_channels=512, kernel_size=1)
+        
+    def forward(self, x) -> Dict[str, Tensor]:
+        #print(x.shape)
+        # x=self.inconv(x)
+        qconv1 = self.qconv1(x)
+        x_sc_mlp_feat=self.mlP_model(qconv1)
+        qconv2 = self.qconv2(x_sc_mlp_feat)
+        # qconv2=self.outconv(qconv2)
         feat = self.head(qconv2)
         qconv2 = torch.amax(qconv2, dim=(2, 3), keepdim=True)
         feat = torch.amax(feat, dim=(2, 3), keepdim=True)
         return {"feat_res4": qconv2, "feat_res5": feat}
-
         
 
 # PS_ARM
@@ -558,12 +667,17 @@ class TokenMixer(nn.Module):
 
 
 class ChannelMixer(nn.Module):
-    def __init__(self, num_features, image_size, num_patches, expansion_factor, dropout):
+    def __init__(self, num_features, image_size, num_patches, expansion_factor, dropout,use_CA=False):
         super().__init__()
         self.norm = nn.LayerNorm(num_features)
         self.mlp = MLP(num_features, expansion_factor, dropout)
         self.image_size =image_size
-        self.channel_att = ChannelGate(num_features, )
+        self.use_CA=use_CA
+        if(use_CA):
+            self.CA=RestormerBlock(dim=256,num_heads=32,ffn_expansion_factor=2,bias=True,LayerNorm_type='WithBias')
+        else:
+            self.channel_att = ChannelGate(num_features, )
+
 
     def ChannelGate_forward(self, x):
         residual =x 
@@ -579,7 +693,12 @@ class ChannelMixer(nn.Module):
     def forward(self, x):
         # x.shape == (batch_size, num_patches, num_features)
         residual = x
-        x_pre_norm = self.ChannelGate_forward(x)
+        if(self.use_CA==False):
+            x_pre_norm = self.ChannelGate_forward(x)
+        else:
+            x_pre_norm = self.CA(to_4d(x,14,14))
+            x_pre_norm=to_3d(x_pre_norm)
+                     
         x = self.norm(x_pre_norm)
         x = self.mlp(x)
         # x.shape == (batch_size, num_patches, num_features)
@@ -619,12 +738,11 @@ class ARM_Mixer(nn.Module):
         patch_size=1,
         in_channels=256,
         num_features=256,
-        expansion_factor=3,        
+        expansion_factor=2,        
         dropout=0.5,
     ):
         num_patches = check_sizes(image_size, patch_size)
         super().__init__()
-        
         self.mixers = MixerLayer(num_patches, image_size, num_features, expansion_factor, dropout)
         self.simam = SimAM()
 
@@ -647,11 +765,16 @@ class ARM_Mixer(nn.Module):
 class FPN(nn.Module):
     def __init__(self,convnext):
         super(FPN,self).__init__()
-        self.inplanes = 128
+        self.inplanes = 256
+        self.out_channels = convnext.features[5][-1].block[5].out_features
+        
+        self.alpha1=nn.Parameter(torch.full((1,), 0.5)).float()
+        self.alpha2=nn.Parameter(torch.full((1,), 0.5)).float()
+        self.alpha3=nn.Parameter(torch.full((1,), 0.5)).float()
 
         #处理输入的C1模块
         self.inputLayer=convnext.features[0]#3 to 128
-        
+        self.hiddenChannel=128
         #搭建自上而下的C2、C3、C4、C5
         self.layer1 = convnext.features[1]#128 to 128 3
         self.downsample2=convnext.features[2]
@@ -663,21 +786,30 @@ class FPN(nn.Module):
         
 
         #对C5减少通道数得到P5
-        self.toplayer = nn.Conv2d(1024,512,1,1,0)
-
+        self.toplayer = nn.Conv2d(1024,self.hiddenChannel,1,1,0)\
+        #carafe上采样
+        self.upsample1=CARAFEPack(self.hiddenChannel,scale_factor=2)
+        self.upsample2=CARAFEPack(self.hiddenChannel,scale_factor=2)
+        self.upsample3=CARAFEPack(self.hiddenChannel,scale_factor=2)
         #3x3卷积融合特征
-        self.smooth1 = nn.Conv2d(512, 512, 3, 1, 1)
-        self.smooth2 = nn.Conv2d(512, 512, 3, 1, 1)
-        self.smooth3 = nn.Conv2d(512, 512, 3, 1, 1)
+        self.smooth1 = nn.Conv2d(self.hiddenChannel, 512, 3, 1, 1)
+        self.smooth2 = nn.Conv2d(self.hiddenChannel, 512, 3, 1, 1)
+        self.smooth3 = nn.Conv2d(self.hiddenChannel, 512, 3, 1, 1)
+
 
         #横向连接，保证通道数相同
-        self.latlayer1 = nn.Conv2d(512,512,1,1,0)
-        self.latlayer2 = nn.Conv2d(256, 512, 1, 1, 0)
-        self.latlayer3 = nn.Conv2d(128, 512, 1, 1, 0)
+        self.latlayer1 = nn.Conv2d(512,self.hiddenChannel,1,1,0)
+        self.latlayer2 = nn.Conv2d(256, self.hiddenChannel, 1, 1, 0)
+        self.latlayer3 = nn.Conv2d(128, self.hiddenChannel, 1, 1, 0)
 
+    def upsample(self, x,upsample):
+        model = upsample.cuda()
+        x = x.cuda()
+        out = model(x)
+        return out
+    
     def _upsample_add(self, x, y):
         _,_,H,W = y.shape
-        print(y.shape)
         return F.interpolate(x,size=(H,W),mode='bilinear',align_corners=False).contiguous() + y
 
     def forward(self,x):
@@ -685,18 +817,24 @@ class FPN(nn.Module):
         # 自下而上
         c1 = self.inputLayer(x)#128
         c2 = self.layer1(c1)#128
-        c3 = self.downsample2(self.layer2(c2))#256
-        c4 = self.downsample3(self.layer3(c3))#512
-        c5 = self.downsample4(self.layer4(c4))#1024
+        c3 = self.layer2(self.downsample2(c2))#256
+        c4 = self.layer3(self.downsample3(c3))#512
+        c5 = self.layer4(self.downsample4(c4))#1024
 
         #自上而下
         p5 = self.toplayer(c5)#1024 512 256
-        p4 = self._upsample_add(p5, self.latlayer1(c4)).contiguous()
-        p3 = self._upsample_add(p4, self.latlayer2(c3)).contiguous()
-        p2 = self._upsample_add(p3, self.latlayer3(c2)).contiguous()
+        # p4 = self.upsample(p5,self.upsample1).contiguous()+self.latlayer1(c4) 
+        # p3 = self.upsample(p4,self.upsample2).contiguous()+self.latlayer2(c3)  
+        # p2 = self.upsample(p3,self.upsample3).contiguous()+self.latlayer3(c2) 
+        p4 = self.upsample(p5,self.upsample1).contiguous()
+        p3 = self.upsample(p4,self.upsample2).contiguous()
+        p2 = self.upsample(p3,self.upsample3).contiguous()
 
+
+ 
         #卷积融合，平滑处理
-        p4 = self.smooth1(p4)
-        p3 = self.smooth2(p3)
-        p2 = self.smooth3(p2)
-        return p2, p3, p4, p5
+        p4 = self.smooth1(p4)*self.alpha1+self.smooth1(self.latlayer1(c4))*(1-self.alpha1) 
+        p3 = self.smooth2(p3)*self.alpha2+self.smooth2(self.latlayer2(c3))*(1-self.alpha2)  
+        p2 = self.smooth3(p2)*self.alpha3+self.smooth3(self.latlayer3(c2))*(1-self.alpha3) 
+        
+        return {'feat_res4':c4,'p4':p4,'p3':p3,'p2':p2}

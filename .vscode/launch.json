@@ -1,0 +1,54 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--img_dir",
+                "/data/img",
+                "--out_dir",
+                "/data/save",
+                "--purpose",
+                "mot",
+            ]
+        },
+        {
+            "name": "cuhk",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/engine/main.py", //可执行文件路径
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--trial_config=/home/lyh/data/EDIT_NETWORK/configs/custom/cuhk_train.yaml"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "3",
+                "CUDA_LAUNCH_BLOCKING": "1",
+                "TORCH_DISTRIBUTED_DEBUG": "DETAIL"
+            },
+        },
+        {
+            "name": "prw",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/engine/main.py", //可执行文件路径
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--trial_config=/home/lyh/data/EDIT_NETWORK/configs/custom/prw_resnet_train.yaml"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+        },
+    ]
+}

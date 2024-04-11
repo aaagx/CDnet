@@ -5,6 +5,8 @@ ssl._create_default_https_context = ssl._create_unverified_context
 # Global imports
 import argparse
 import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:256'
+
 import shutil
 import pickle
 from pprint import pprint
@@ -43,7 +45,7 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
         os.environ["PYTHONHASHSEED"] = str(config['random_seed'])
 
     # Distributed setup
-    if config['debug']:
+    if config['debug'] or config['no_distribute']:
         print('==> Not using distributed: debug')
         rank = 0
     else:
@@ -63,7 +65,9 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
     # Build model
     print("Creating model")
     model, model_without_ddp = engine_utils.get_model(config, num_pid, device=device)
-
+    if( config['no_distribute']):
+        model=model_without_ddp 
+        
     # Just test for one epoch, no training
     if config['test_only']:
         print('==> Running in test-only mode')
@@ -126,6 +130,9 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
                 lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
                     T_max=len(train_loader)*config['epochs'])
         
+        # if torch.distributed.is_initialized():
+        #      print(f"Rank: {torch.distributed.get_rank()}, World Size: {torch.distributed.get_world_size()}")
+             
         # Train for one epoch
         metric_logger = train_one_epoch(model, optimizer, train_loader,
             device, epoch, config['print_freq'], optimizer_type=config['optimizer'][0],
@@ -187,7 +194,7 @@ def run(config, checkpoint_dir=None, use_detector=True, detector_only=False):
             try:
                 _metric_dict, _ = evaluate.evaluate_performance(model, test_loader, device,
                     use_amp=config['use_amp'],
-                    use_gfn=config['use_gfn'], gfn_mode=config['gfn_mode']) 
+                    use_gfn=config['use_gfn'], gfn_mode=config['gfn_mode'],use_gt=config['use_gt']) 
                 metric_dict.update(_metric_dict)
             except RuntimeError:
                 raise

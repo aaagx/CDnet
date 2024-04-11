@@ -210,7 +210,12 @@ def get_train_loader(config):
         else:
             g_rs = None
         ## Build train sampler
-        train_sampler = torch.utils.data.RandomSampler(train_dataset, generator=g_rs)
+        if(config['num_workers']==1):
+            print("use normalSampler")
+            train_sampler = torch.utils.data.RandomSampler(train_dataset, generator=g_rs)
+        else:
+            print("use distributedSampler")
+            train_sampler = torch.utils.data.DistributedSampler(train_dataset)
 
     # Determine aspect ratio grouping based on dataset
     if config['dataset'] == 'cuhk':
@@ -233,6 +238,8 @@ def get_train_loader(config):
         train_batch_sampler = GroupedBatchSampler(train_sampler, group_ids, config['batch_size'])
     else:
         train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, config['batch_size'], drop_last=True)
+
+
     # Set up train loader
     ## Control randomness
     if config['use_random_seed']:

@@ -16,7 +16,7 @@ import sys
 sys.path.append("./src")
 # Package imports
 from losses.ntxent_loss import SafeNTXentLoss
-
+from models.backbone import ArmNextHead,ArmRes5Head,ResnetHead
 
 # Applies "RoI Pooling" to entire feature map extent
 class ScenePool(nn.Module):
@@ -38,7 +38,13 @@ class SceneEmbeddingHead(nn.Module):
         super().__init__()
         # Pooling layer
         self.image_roi_pool = ScenePool(featmap_name='feat_res4', output_size=pool_size)
-        self.image_reid_head = copy.deepcopy(reid_head)
+        if(isinstance(reid_head,ArmNextHead) or isinstance(reid_head,ArmRes5Head) or isinstance(reid_head,ResnetHead)):
+            #不复制
+            print("ArmNextHead without copy")
+            self.image_reid_head=reid_head
+        else:
+            #直接复制
+            self.image_reid_head = copy.deepcopy(reid_head)
         self.image_emb_head = copy.deepcopy(emb_head)
         ## We don't use NAE embedding norms for the scene embeddings
         self.image_emb_head.rescaler = None
@@ -116,7 +122,7 @@ class QueryImageFuser(nn.Module):
 
 
 class GalleryFilterNetwork(nn.Module):
-    def __init__(self, roi_pool, reid_head, emb_head,
+    def __init__(self, roi_pool,gfn_head, reid_head, emb_head,
             emb_dim=256, temp=0.1, se_temp=0.2,
             filter_neg=True, gfn_query_mode='batch',
             gfn_activation_mode='se', gfn_scene_pool_size=56,
@@ -128,7 +134,7 @@ class GalleryFilterNetwork(nn.Module):
         self.query_roi_pool = roi_pool
         self.query_reid_head = reid_head
         self.query_emb_head = emb_head
-        self.head = SceneEmbeddingHead(reid_head, emb_head, pool_size=gfn_scene_pool_size)
+        self.head = SceneEmbeddingHead(gfn_head, emb_head, pool_size=gfn_scene_pool_size)
         self.gfn_mode = mode
         if self.gfn_mode not in  ('image', 'separate'):
             self.fuser = QueryImageFuser(emb_dim,
@@ -142,6 +148,7 @@ class GalleryFilterNetwork(nn.Module):
         self.neg_num_sample = neg_num_sample
         self.device = device
         self.ntx_temp = temp
+        self.gfn_head= gfn_head
 
         # Set up gfn_query_mode params
         self.reid_loss = reid_loss
@@ -215,38 +222,56 @@ class GalleryFilterNetwork(nn.Module):
         for t in targets:
             for pid, is_known in zip(t['person_id'].tolist(), t['is_known'].tolist()):
                 is_known_dict[pid] = is_known
+        #取出每张图片带有的ids 然后按图片顺序存为list
         query_pids_list = [t['person_id'] for t in targets]
+        #取出是否为已知行人idS的标记并 然后按图片顺序变为list
         known_query_pids_list = [t['person_id'][t['is_known']] for t in targets]
+        #生成图片的label
         gfn_image_labels = list(range(len(query_pids_list)))
         image_labels = torch.LongTensor(gfn_image_labels).to(self.device)
+
+        #取出行人的box并标记为list
         gt_boxes = [t["boxes"].to(torch.float) if len(t['boxes']) > 0 else torch.empty(0, 4, dtype=torch.float, device=self.device) for t in targets]
         gt_labels = query_pids_list
+
+        #将每张图片的ids拆出并转为set
         gfn_image_sets = [set(_query_pids.tolist()) for _query_pids in query_pids_list]
         I = len(targets)
 
         # Boxvar
+        #表示person id 在所有已知id中的位置
         gfn_lut_label_list = [t['labels']-1 for t in targets]
         # Boxes
         boxes = gt_boxes
         # Labels
+        #取出每张图片的ids并且转化为一个超长的list
         query_pids = sum([qp.tolist() for qp in query_pids_list], [])
         met_num_list = query_pids
+        #转化为tensor
         gfn_met_label_tsr = torch.LongTensor(met_num_list).to(self.device)
+
         # Image indices
+        #len(query_pids)为一张图片中的pid的数量 i为图片的label 生成一个list表示该id属于哪个图片
         gfn_image_indices = sum([[i]*len(query_pids) for i, query_pids in enumerate(query_pids_list)], [])
         # Get OIM labels if we are using gfn_query_mode
         ## Make sure to subtract 1 to get correct indices, align with query_unk index
         gfn_lut_label_tsr = torch.cat(gfn_lut_label_list)
 
         # Prep known tsr
+        #将known标记转化为一个list
         gfn_met_known_tsr = torch.BoolTensor([is_known_dict[l] for l in gfn_met_label_tsr.tolist()]).to(self.device)
 
         # Extract GT query features
-
+        # 训练时直接使用真实框提取特征
         query_features = self.query_roi_pool(features, boxes, image_shapes)
-        query_features = self.query_reid_head(query_features)
-        query_emb, _ = self.query_emb_head(query_features)
-        Q, D = query_emb.size()
+
+        if(query_features.shape[0]==0):
+            Q,D=0,0
+        else:
+            query_features = self.query_reid_head(query_features)
+            query_emb, _ = self.query_emb_head(query_features)
+            Q, D = query_emb.size()
+
         if Q == 0:
             gfn_loss = torch.tensor(0.0).to(self.device)
             gfn_loss_dict = {'gfn_loss': gfn_loss}
@@ -265,7 +290,10 @@ class GalleryFilterNetwork(nn.Module):
             #
             image_id_list = [target['image_id'].item() for target in targets]
             ## Fetch previous entries
+            #找出该batch种所有已知的行人id
             query_label_union = [n for n in list(set.union(*gfn_image_sets)) if is_known_dict[n]]
+
+            #采样数量，为图像数量，若已知的行人id少于图像数量，则采样行人id的数量
             num_sample = min(I, len(query_label_union))
             query_label_union = np.random.choice(query_label_union, size=(num_sample,), replace=False) 
             # chosen_idx should start at length of current list of image ids
@@ -278,22 +306,24 @@ class GalleryFilterNetwork(nn.Module):
             lut_image_feat_list = []
             lut_query_image_idx_list = []
             lut_query_feat_list = []
-            lut_query_label_list = []
+            lut_query_label_list = []   
             lut_query_known_list = []
             lut_lut_label_list = []
             lut_query_label_set_list = []
             pos_query_counter = collections.Counter()
             neg_query_counter = collections.Counter()
-            # Get samples from LUT
+            # Get samples from LUT’
+            #额外构建一个长期的lut，挖掘额外的正例和负例
             query_image_idx_sets = [set(known_query_pids.tolist()) for known_query_pids in known_query_pids_list]
             for query_idx, query_label in enumerate(query_label_union):
                 for rand_idx in image_rand_idx:
                     image_id = image_lut_keys[rand_idx]
                     image_dict = self.image_lut[image_id]
                     image_query_label_set = image_dict['query_label_set']
+                    #如果在lut中找到正例
                     if query_label in image_query_label_set:
                         if (image_id not in chosen_image_id_set) and (image_id not in image_id_list): 
-                            #
+                            #将lut中的正例加入本轮的比较
                             lut_image_feat_list.append(image_dict['image_feat'].to(self.device))
                             lut_query_feat_list.append(image_dict['query_feat'].to(self.device)) 
                             lut_query_label_list.append(image_dict['query_label'].to(self.device)) 
@@ -312,11 +342,14 @@ class GalleryFilterNetwork(nn.Module):
                 # Add another sample: hard negative
                 if self.neg_num_sample > 0:
                     query_image_idx_set = None
+                    #查看每张图片中的已知行人id
                     for _query_image_idx_set in query_image_idx_sets:
+                        #当前采样的query行人id在当前的set中 说明是正例
                         if query_label in _query_image_idx_set:
                             query_image_idx_set = _query_image_idx_set
                             break
-                    if query_image_idx_set is None:
+                    #额外采样一个负例
+                    if query_image_idx_set is None: 
                         print('WARNING: query_image_idx is None')
                     else:
                         for rand_idx in image_rand_idx:
@@ -346,7 +379,9 @@ class GalleryFilterNetwork(nn.Module):
             ## Store new entries in LUT
             for image_idx, image_id in enumerate(image_id_list):
                 image_mask = gfn_image_idx_tsr == image_idx
+                #表示图片中存在已知id
                 if image_mask.sum().item() > 0:
+                #取出存在已知id的图像的相关信息来构建image_lut
                     self.image_lut[image_id] = {
                         'image_feat': scene_emb[image_idx].unsqueeze(0).detach().cpu(),
                         'query_feat': query_emb[image_mask].detach().cpu(),
@@ -356,6 +391,7 @@ class GalleryFilterNetwork(nn.Module):
                         'query_label_set': gfn_image_sets[image_idx],
                     }
             ## Combine previous entries with current batch
+            #将额外采样的正例和负例加入比较
             scene_emb = torch.cat([scene_emb, *lut_image_feat_list], dim=0)
             gfn_image_idx_tsr = torch.cat([gfn_image_idx_tsr, *lut_query_image_idx_list], dim=0)
             query_emb = torch.cat([query_emb, *lut_query_feat_list], dim=0)
@@ -373,14 +409,16 @@ class GalleryFilterNetwork(nn.Module):
         # Modify GT query features if we are using oim
         if self.gfn_query_mode == 'oim':
             ## Make sure to subtract 1 to get correct indices, align with query_unk index
+            #取出所有已知id的mask
             gfn_lut_pid_mask = gfn_lut_label_tsr != self.query_unk
-            #
+            #query_emb为根据图像中所有的框取出的行人特征
             oim_emb = query_emb
+            #将已知id的行人特征替换为re_id中的原型
             oim_emb[gfn_lut_pid_mask] = self.reid_loss.lut[gfn_lut_label_tsr[gfn_lut_pid_mask]].to(self.device)
             oim_nonzero_mask = ~((oim_emb==0).all(dim=1))
             gfn_lut_pid_mask = gfn_lut_pid_mask & oim_nonzero_mask
             query_emb[gfn_lut_pid_mask] = self.reid_loss.lut[gfn_lut_label_tsr[gfn_lut_pid_mask]].to(self.device)
-            #
+            #取出存在已知id的行人特征
             query_emb = query_emb[gfn_met_known_tsr]
             gfn_met_label_tsr = gfn_met_label_tsr[gfn_met_known_tsr]
             gfn_image_idx_tsr = gfn_image_idx_tsr[gfn_met_known_tsr]
@@ -396,52 +434,73 @@ class GalleryFilterNetwork(nn.Module):
             # Get features combined with all possible target images
             gfn_query_features_list = self.fuser(query_emb, scene_emb, p=True)
             # Get features combined with their source image
+            # I = scene_emb.size(0)
+            # Q = query_emb.size(0)
             identity_mask = torch.zeros(I, Q, dtype=torch.bool).to(self.device)
             identity_mask.scatter_(0, gfn_image_idx_tsr.unsqueeze(0), True)
+            #把每个query对应的scene结合的feature取出
             gfn_query_features = gfn_query_features_list[identity_mask]
 
         # new method for gfn miner
         ## build padded tensor of pids per image
+        #构建一个（图片数*一张图片内最多pid数量的张量）
         gfn_max_len = max([len(s) for s in gfn_image_sets])
         gfn_image_pid_tsr = -torch.ones(len(gfn_image_sets), gfn_max_len, dtype=torch.long).to(self.device)
         _gfn_image_pid_mask = torch.zeros(len(gfn_image_sets), gfn_max_len, dtype=torch.bool).to(self.device)
-        
+
         M = gfn_max_len
         for pid_set_idx, pid_set in enumerate(gfn_image_sets):
             pid_tsr = torch.LongTensor(list(pid_set))
             gfn_image_pid_tsr[pid_set_idx, :pid_tsr.size(0)] = pid_tsr
             _gfn_image_pid_mask[pid_set_idx, :pid_tsr.size(0)] = True
+        #放入pid
+
+        #无效部分填充负值
         empty_mask = gfn_image_pid_tsr==-1
         gfn_image_pid_tsr[empty_mask] = (-torch.arange(1, 1+empty_mask.sum().item())).to(self.device)
 
         ## positive pairs
+        # gfn_image_pid_tsr.unsqueeze(2):(图片数,一张图片内最多pid数量的张量,1)
+        #gfn_met_label_tsr:(id总数)
+        #image_pid_match_mask(图片数,一张图片内最多pid数量的张量,id总数) 变为one-hot编码
+        # 再通过any（dim=1）变为（图片数，id总数）表示每张图片内的id在所有id中的的mask 
         image_pid_match_mask = (gfn_image_pid_tsr.unsqueeze(2) == gfn_met_label_tsr).any(dim=1)
 
         ## mask: for negatives, images must share at least 1 'p' pid in common
+        ## 1.找出该batch里所有具有相同id的图片并且标记（这里称为相关图片） 得到 I*I的mask张量
+        ## 2.根据张量 和 id属于哪个图片的长向量 运算出 每一张图片有关的id（自己的id+相关下的所有id）得到 I*id总数量的mask张量
         if self.filter_neg:
             # Build mask of which images share at least one pid with another image
             gfn_image_match_mask = (gfn_image_pid_tsr.view(I, 1, M, 1) == gfn_image_pid_tsr.view(1, I, 1, M)).reshape(I, I, -1).any(dim=2)
             # Index mask according to gfn_image_pid_tsr, gfn_met_label_tsr
+            #gfn_image_idx_tsr:pid属于哪张图片的list
+
             image_pid_share_mask = gfn_image_match_mask[:, gfn_image_idx_tsr]
-            # 
+            # image_pid_share_mask : (I,id总数) 
             known_pid_mask = gfn_met_known_tsr.unsqueeze(0).repeat(image_pid_share_mask.size(0), 1)
 
         ## Build GFN pairs
+        #取出不属于当前图片的id的mask
         _image_pid_diff_mask = ~image_pid_match_mask
         if self.filter_neg:
+            #                        不在当前图片出现过的id       无关图片的id              不在当前图片出现的id     有关图片的id            已知id
             image_pid_diff_mask = (_image_pid_diff_mask & ~image_pid_share_mask) | (_image_pid_diff_mask & image_pid_share_mask & known_pid_mask)
+            # 等于删除了相关图片中的未知id，保证一定是不同的id 这里无关图片的id部分没添加已知id的条件 比较奇怪
         else:
+        #                            不在当前图片出现过的id 
             image_pid_diff_mask = _image_pid_diff_mask
 
         if self.gfn_mode == 'separate':
             # Get pairs
             gfn_a1, gfn_p = torch.where(image_pid_match_mask)
             gfn_a2, gfn_n = torch.where(image_pid_diff_mask)
+            #生成坐标
             indices_tuple = (gfn_a1, gfn_p, gfn_a2, gfn_n)
 
             # Compute GFN Loss
             gfn_loss = self.criterion(scene_emb, image_labels,
                 ref_emb=gfn_query_features, ref_labels=gfn_met_label_tsr, indices_tuple=indices_tuple)
+                
         elif self.gfn_mode == 'combined':
             gfn_image_features_list = gfn_query_features_list.permute(1, 0, 2)
             match_mask_list, diff_mask_list = [], []

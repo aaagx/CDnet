@@ -29,9 +29,11 @@ from models.gfn import GalleryFilterNetwork
 ## Losses
 from losses.oim_loss import OIMLossSafe
 from losses.oim_loss import LOIMLossSafe
+from losses.oim_loss import ArcOIMLossSafe
+from losses.oim_loss import circleLOIMLossSafe
 from losses.protoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 from losses.MultiScalePSRoiAlign import MultiScale_PS_RoIAlign
-
+from collections import OrderedDict
 
 class SafeBatchNorm1d(nn.BatchNorm1d):
     """
@@ -85,7 +87,15 @@ class SafeBatchNorm1d(nn.BatchNorm1d):
             self.eps,
         )
 
-
+class fpnRPNhead(RPNHead):
+    def forward(self, x: List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]:
+        logits = []
+        bbox_reg = []
+        t = self.conv(x)
+        logits.append(self.cls_logits(t))
+        bbox_reg.append(self.bbox_pred(t))
+        return logits, bbox_reg
+    
 # Fork of torchvision RPN with safe fp16 loss
 class SafeRegionProposalNetwork(RegionProposalNetwork):
     def __init__(self, *args, **kwargs):
@@ -142,24 +152,44 @@ class SeqNeXt(nn.Module):
         #
         self.use_gfn = config['use_gfn']
         self.gfn_use_image_lut = config['gfn_use_image_lut']
-
+        fpn=None
         # Backbone model
         if config['model'] == 'resnet':
-            backbone, prop_head = build_resnet(arch=config['backbone_arch'],
+            backbone, prop_head,prop_head2,prop_head3,prop_head4, = build_resnet(arch=config['backbone_arch'],
                 pretrained=config['pretrained'],
                 freeze_backbone_batchnorm=config['freeze_backbone_batchnorm'], freeze_layer1=config['freeze_layer1'],user_arm_module=config['user_arm_module'])
+            featmap_names=["feat_res4"]
         elif config['model'] == 'convnext':
-            backbone, prop_head ,prop_head2 = build_convnext(arch=config['backbone_arch'],
+            backbone, prop_head ,prop_head2,prop_head3,prop_head4,fpn= build_convnext(arch=config['backbone_arch'],
                 pretrained=config['pretrained'],
-                freeze_layer1=config['freeze_layer1'],user_arm_module=config['user_arm_module'])
+                freeze_layer1=config['freeze_layer1'],user_arm_module=config['user_arm_module'],use_gem=config['use_gem'])
+            fpn=None
+            if(fpn!=None):
+                print('use fpn')
+                featmap_names=["feat_res4",'p2','p3','p4']
+            else:
+                featmap_names=["feat_res4"]
+            print(featmap_names)
         else:
             raise NotImplementedError
 
         # RPN Anchor settings
+        # if(fpn!=None):
+        #     anchor_sizes = ((256),
+        #         (128),
+        #         (64),
+        #         (32))
+
+        #     aspect_ratios = ((0.5, 1.0, 2.0),
+        #                     (0.5, 1.0, 2.0),
+        #                     (0.5, 1.0, 2.0),
+        #                     (0.5, 1.0, 2.0))
+        #     rpn_conv_depth = 1 
+        # else:
         anchor_sizes = ((32, 64, 128, 256, 512),)
         aspect_ratios = ((0.5, 1.0, 2.0),)
         rpn_conv_depth = 1
-
+        
         anchor_generator = AnchorGenerator(
             sizes=anchor_sizes, aspect_ratios=aspect_ratios,
         )
@@ -170,6 +200,7 @@ class SeqNeXt(nn.Module):
         )
         if(config["backbone_arch"]=='convnext_fpn'):
             head.conv=prop_head2
+ 
         
         pre_nms_top_n = dict(
             training=config['rpn_pre_nms_topn_train'], testing=config['rpn_pre_nms_topn_test']
@@ -194,18 +225,40 @@ class SeqNeXt(nn.Module):
 
         # Set up box predictors
         faster_rcnn_predictor = FastRCNNPredictor(box_channels, 2)
+        gfn_head=None
+        if config['model'] == 'convnext': 
+            if(config['share_head']==True):
+                print("use share_head")
+                reid_head=prop_head
+                print("use gem_head to get scene emb")
+                gfn_head=prop_head
+            elif(config['use_gem']==True):
+                reid_head=prop_head3
+                gfn_head=prop_head 
+            elif(config['use_gem']==False):
+                reid_head=prop_head3
+                gfn_head=prop_head
+            else:
+                reid_head = copy.deepcopy(prop_head)
+                gfn_head=reid_head
+        elif config['model'] == 'resnet':
+            if(config['share_head']==True):
+                print("use share_head")
+                reid_head=prop_head
+                print("use gem_head to get scene emb")
+                gfn_head=prop_head
+            else:
+                reid_head=prop_head3
+                gfn_head=prop_head2 
 
-        if(config['share_head']==True):
-            print("use share_head")
-            reid_head=prop_head
-        else:
-            reid_head = copy.deepcopy(prop_head)
+        if(config['two_stage_decouple']==False):
+            prop_head4=None
 
         if('ps_roi_align' in config.keys()):
             if(config['ps_roi_align']==True):
-                print("user ps_RoiAlign")
+                print("use ps_RoiAlign")
                 box_roi_pool  = MultiScale_PS_RoIAlign(
-                        featmap_names=["feat_res4"], output_size=14, sampling_ratio=2
+                        featmap_names=featmap_names, output_size=14, sampling_ratio=2
                         ) 
                 reid_roi_pool = MultiScaleRoIAlign(
                         featmap_names=["feat_res4"], output_size=14, sampling_ratio=2
@@ -213,12 +266,12 @@ class SeqNeXt(nn.Module):
             else:
             # Set up RoI Align
                 box_roi_pool = reid_roi_pool = MultiScaleRoIAlign(
-                featmap_names=["feat_res4"], output_size=14, sampling_ratio=2
+                featmap_names=featmap_names, output_size=14, sampling_ratio=2
         )
         else:
         # Set up RoI Align
             box_roi_pool = reid_roi_pool = MultiScaleRoIAlign(
-            featmap_names=["feat_res4"], output_size=14, sampling_ratio=2
+            featmap_names=featmap_names, output_size=14, sampling_ratio=2
         )
         box_head = reid_head
 
@@ -245,6 +298,14 @@ class SeqNeXt(nn.Module):
         # Re-ID
             reid_loss = LOIMLossSafe(config['emb_dim'], oim_lut_size,
                 config['oim_cq_size'], config['oim_momentum'], config['oim_scalar'])
+        elif(config['oim_type']=='ArcOIM'):
+            print('use ArcOim')
+            reid_loss = ArcOIMLossSafe(config['emb_dim'], oim_lut_size,
+                config['oim_cq_size'], config['oim_momentum'], config['oim_scalar'])
+        elif(config['oim_type']=='circleOIM'):
+            print('user cricleOIM')
+            reid_loss = circleLOIMLossSafe(config['emb_dim'], oim_lut_size,
+                config['oim_cq_size'], config['oim_momentum'], config['oim_scalar'],config["circle_m"]) 
         else:
             reid_loss = OIMLossSafe(config['emb_dim'], oim_lut_size,
                 config['oim_cq_size'], config['oim_momentum'], config['oim_scalar'])
@@ -252,17 +313,18 @@ class SeqNeXt(nn.Module):
         # Gallery-Filter Network
         if self.use_gfn:
             ## Build Gallery Filter Network
-            self.gfn = GalleryFilterNetwork(reid_roi_pool, reid_head,
-                embedding_head_decouple, mode=config['gfn_mode'],
-                gfn_activation_mode=config['gfn_activation_mode'],
-                emb_dim=config['emb_dim'], temp=config['gfn_train_temp'], se_temp=config['gfn_se_temp'],
-                filter_neg=config['gfn_filter_neg'],
-                use_image_lut=config['gfn_use_image_lut'],
-                gfn_query_mode=config['gfn_query_mode'],
-                gfn_scene_pool_size=config['gfn_scene_pool_size'],
-                pos_num_sample=config['gfn_num_sample'][0], neg_num_sample=config['gfn_num_sample'][1],
-                reid_loss=reid_loss,
-                device=self.device)
+                self.gfn = GalleryFilterNetwork(reid_roi_pool, gfn_head,reid_head,
+                    embedding_head_decouple, mode=config['gfn_mode'],
+                    gfn_activation_mode=config['gfn_activation_mode'],
+                    emb_dim=config['emb_dim'], temp=config['gfn_train_temp'], se_temp=config['gfn_se_temp'],
+                    filter_neg=config['gfn_filter_neg'],
+                    use_image_lut=config['gfn_use_image_lut'],
+                    gfn_query_mode=config['gfn_query_mode'],
+                    gfn_scene_pool_size=config['gfn_scene_pool_size'],
+                    pos_num_sample=config['gfn_num_sample'][0], neg_num_sample=config['gfn_num_sample'][1],
+                    reid_loss=reid_loss,
+                    device=self.device)
+
         else:
             self.gfn = None
 
@@ -293,6 +355,7 @@ class SeqNeXt(nn.Module):
             box_roi_pool=box_roi_pool,
             reid_roi_pool=reid_roi_pool,
             prop_head=prop_head,
+            prop_head2=prop_head4,
             box_head=box_head,
             box_predictor=box_predictor,
             fg_iou_thresh=config['roi_head_pos_thresh_train'],
@@ -306,15 +369,27 @@ class SeqNeXt(nn.Module):
             emb_dim=config['emb_dim'],
             box_head_mode=config['box_head_mode'],
             box_channels=box_channels,
+            
+
             #loss
             focal_loss=config['focal_loss'],
-            l1_loss_focal=config['l1_loss_focal']
+            l1_loss_focal=config['l1_loss_focal'],
+            two_stage_decouple=config['two_stage_decouple'],
+            use_casacade_head=config['use_casacade_head']
+
         )
 
         # batch and pad images
         transform = GeneralizedRCNNTransform()
 
-        self.backbone = backbone
+        # self.backbone = backbone
+        if(fpn!=None):
+            self.backbone = fpn
+            self.fpn=fpn
+        else:
+            self.backbone=backbone
+            self.fpn=None
+        self.backbone_arch=config['backbone_arch']
         self.rpn = rpn
         self.roi_heads = roi_heads
         self.transform = transform
@@ -327,6 +402,7 @@ class SeqNeXt(nn.Module):
         self.lw_box_reg = config['lw_box_reg']
         self.lw_box_cls = config['lw_box_cls']
         self.lw_box_reid = config['lw_box_reid']
+        
 
 
     def inference(self, images: List[Tensor], targets:Optional[List[Dict[str, Tensor]]]=None, inference_mode:str='both') -> List[Dict[str, Tensor]]:
@@ -334,7 +410,12 @@ class SeqNeXt(nn.Module):
         original_image_sizes = [(img.shape[-2], img.shape[-1]) for img in images]
         num_images = len(original_image_sizes)
         images, targets = self.transform(images, targets)
-        bb_features = self.backbone(images.tensors)
+
+        if(self.fpn!=None):
+            fpn_features=self.fpn(images.tensors)
+            bb_features=fpn_features
+        else:  
+            bb_features = self.backbone(images.tensors)
 
         # Get image features from the GFN
         if self.use_gfn:
@@ -356,8 +437,11 @@ class SeqNeXt(nn.Module):
             _embeddings, _ = self.roi_heads.embedding_head(box_features)
             embeddings = _embeddings.split(section_lens, dim=0)
         if (inference_mode in ('det', 'both')) or (inference_mode in ('gt', 'both')):
-            # gallery
-            rpn_features = bb_features
+            # gallery  
+            if(self.fpn!=None):
+                rpn_features =OrderedDict(list(bb_features.items())[0:1])
+            else:
+               rpn_features = bb_features
             # rpn_features =rpn_features.to_sparse()
             proposals, _ = self.rpn(images, rpn_features, targets)
             detections, _ = self.roi_heads(
@@ -386,8 +470,20 @@ class SeqNeXt(nn.Module):
             return self.inference(images, targets, inference_mode=inference_mode)
 
         images, targets = self.transform(images, targets)
-        bb_features = self.backbone(images.tensors)
-        
+
+        if(self.fpn!=None):
+            fpn_features=self.fpn(images.tensors)
+            bb_features=fpn_features
+            # print(fpn_features)    
+            # for str,feature in fpn_features.items():
+            #     print(str+":")
+            #     print(feature.shape)  
+        else:  
+            bb_features = self.backbone(images.tensors)
+        # for str,feature in bb_features.items():
+        #     print(str+':')
+        #     print(feature.shape)     
+ 
         # GFN training
         losses = {}
         if self.use_gfn and self.training:
@@ -395,11 +491,17 @@ class SeqNeXt(nn.Module):
             losses.update(gfn_losses)
 
         # RPN
-        rpn_features = bb_features
+        if(self.fpn!=None):
+            rpn_features =OrderedDict(list(bb_features.items())[0:1])
+        else:
+            rpn_features = bb_features
+
         # print(bb_features)
         # print(rpn_features.shape)
         # rpn_features =rpn_features.to_sparse()
         # print(rpn_features.shape)
+        # if(self.backbone_arch=='convnext_fpn'):
+        #         rpn_features=rpn_features[4]
         proposals, proposal_losses = self.rpn(images, rpn_features, targets)
         _, detector_losses = self.roi_heads(bb_features, proposals, images.image_sizes, targets)
 
@@ -419,6 +521,13 @@ class SeqNeXt(nn.Module):
         losses["loss_box_reg"] *= self.lw_box_reg
         losses["loss_box_cls"] *= self.lw_box_cls
         losses["sim_loss"] *= self.lw_box_reid # (1/10)
+        if(self.roi_heads.use_casacade_head):
+            losses["loss_box_reg"] /= 2
+            losses["loss_box_cls"] /= 2
+            losses["sim_loss"] /= 2
+            losses["loss_box_reg_casacade"] *= self.lw_box_reg/2
+            losses["loss_box_cls_casacade"] *= self.lw_box_cls/2
+            losses["sim_loss_casacade"] *= self.lw_box_reid/2 # (1/10) 
         return losses
 
 
@@ -448,6 +557,9 @@ class SeqRoIHeads(RoIHeads):
         cws_score='scs',
         focal_loss=False,
         l1_loss_focal=False,
+        two_stage_decouple=False,
+        prop_head2=None,
+        use_casacade_head=False,
         *args,
         **kwargs
     ):
@@ -475,9 +587,18 @@ class SeqRoIHeads(RoIHeads):
         self.gfn_use_image_lut = gfn_use_image_lut
         self.box_head_mode = box_head_mode
         self.oim_type=oim_type
+        self.two_stage_decouple=two_stage_decouple
+        self.empty_count=0
+
+
+        if two_stage_decouple:
+            print("use two_stage_decouple")
+            self.prop_head2=prop_head2
+
         if(focal_l1_loss):
             print("use focal L1 loss")
         self.focal_loss=focal_loss
+
         if(focal_loss):
             print("use focal loss")
         self.l1_loss_focal=l1_loss_focal
@@ -485,6 +606,14 @@ class SeqRoIHeads(RoIHeads):
         if self.box_head_mode == 'rcnn':
             self.score_predictor = FastRCNNPredictor(box_channels, 1)
 
+        if(use_casacade_head):
+            print("use casacade_head")
+            self.box_head_casacade=copy.deepcopy(self.box_head)
+            self.embedding_head_casacade=copy.deepcopy(self.embedding_head)
+            self.reid_loss_casacade=copy.deepcopy(self.reid_loss)
+            self.score_predictor_casacade=copy.deepcopy(self.score_predictor)
+            
+        self.use_casacade_head=use_casacade_head
 
     def forward(self, bb_features: Dict[str, Tensor], proposals: List[Tensor],
         image_shapes: List[Tuple[int, int]], targets:Optional[List[Dict[str, Tensor]]]=None) -> Tuple[List[Dict[str, Tensor]], Dict[str, Tensor]]:
@@ -513,7 +642,9 @@ class SeqRoIHeads(RoIHeads):
         # ------------------- Faster R-CNN head ------------------ #
         
         prop_features = bb_features
+        # print(bb_features)
         proposal_features = self.box_roi_pool(prop_features, reg_proposals, image_shapes)
+        # print(proposal_features)
         proposal_features = self.prop_head(proposal_features)
         proposal_cls_scores, proposal_regs = self.faster_rcnn_predictor(
             proposal_features[self.prop_head.featmap_names[-1]]
@@ -523,15 +654,6 @@ class SeqRoIHeads(RoIHeads):
             boxes = self.get_boxes(proposal_regs, reg_proposals, image_shapes)
             boxes = [boxes_per_image.detach() for boxes_per_image in boxes]
             boxes, box_img_ids, box_pid_labels, box_reg_targets = self.select_training_samples(boxes, targets)
-
-            # print(len(boxes))
-            # # batch_size
-            # print(len(targets))
-            # # batch_size
-            # print(len(box_pid_labels))
-            # # batch_size
-            # print(len(box_pid_labels))
-            # # batch_size
         else:
             # invoke the postprocess method inherited from parent class to process proposals
             boxes, scores, _ = self.postprocess_detections(
@@ -555,6 +677,115 @@ class SeqRoIHeads(RoIHeads):
         else:
             scores = [torch.empty(0)]
 
+        result, losses = [{}], {}  
+         # --------------------- casacade head -------------------- # 
+
+        if(self.use_casacade_head):
+            casacade_boxes = boxes
+            if self.training:
+                box_labels = [y.clamp(0, 1) for y in box_pid_labels]
+            else:
+                box_labels = [torch.empty(0)]
+
+            ###
+            box_features_casacade = self.reid_roi_pool(bb_features, casacade_boxes, image_shapes)
+
+            if self.training: 
+                register_targets_for_pn(self.box_head_casacade, torch.cat(box_labels).long())
+                register_targets_for_pn(self.embedding_head_casacade, torch.cat(box_labels).long())
+
+            reid_features = box_features = self.box_head_casacade(box_features_casacade)
+            box_embeddings, box_cls_scores = self.embedding_head_casacade(reid_features)
+
+        
+            if self.box_head_mode == 'rcnn':
+                box_cls_scores, box_regs = self.score_predictor_casacade(box_features[self.box_head.featmap_names[-1]])
+                box_cls_scores = box_cls_scores.squeeze(1)
+                box_regs = box_regs.repeat(1, 2)
+            else:
+                box_regs = self.box_predictor(box_features[self.box_head.featmap_names[-1]])
+                # raise Exception
+
+            if box_cls_scores.dim() == 0:
+                box_cls_scores = box_cls_scores.unsqueeze(0)
+            if self.training:
+                # Detection losses
+                losses = losses | detection_losses_casacade(
+                    box_cls_scores,
+                    box_regs,
+                    box_labels,
+                    box_reg_targets,
+                    self.focal_loss,
+                    self.l1_loss_focal
+                )
+                # Reid loss
+                _box_pid_labels = torch.cat(box_pid_labels)
+                _box_reg_targets= torch.cat(box_reg_targets)
+                _casacade_boxes=torch.cat(casacade_boxes)
+
+                fg_mask = _box_pid_labels > 0 
+                fg_box_embeddings = box_embeddings[fg_mask]
+                query_labels = _box_pid_labels[fg_mask]-1
+                query_feats = fg_box_embeddings
+    
+                
+                query_boxes=_casacade_boxes[fg_mask] 
+                query_boxes_target=_box_reg_targets[fg_mask]
+
+                ## Compute re-id loss
+                if self.oim_type == 'LOIM'or self.oim_type=='ArcOIM' or self.oim_type=='circleOIM':
+                    max_iou_list = []
+                    # step1. compute IoU between all proposals and all ground-truth boxes
+                    # step2. select the maximum ground-truth box for each proposal
+                    # step3. (within the LOIM loss) filter out background proposals
+                    
+                    for batch_index in range(len(query_boxes)):
+                        box_p = query_boxes
+                        box_t = query_boxes_target
+                        ious = box_ops.box_iou(box_p, box_t) 
+                        ious_max = torch.max(ious, dim=1)[0] 
+                        max_iou_list.append(ious_max)
+                    if(len(max_iou_list)!=0):
+                        ious = torch.cat(max_iou_list, dim=0)
+                        sim_loss_casacade = self.reid_loss_casacade(query_feats, query_labels,ious)
+                        losses['sim_loss_casacade'] = sim_loss_casacade
+                    else:
+                        losses['sim_loss_casacade'] = torch.tensor(0.0)
+                else:
+                    sim_loss_casacade = self.reid_loss_casacade(query_feats, query_labels)
+                    losses['sim_loss_casacade'] = sim_loss_casacade
+
+                #losses.update(sim_loss=sim_loss)
+
+                boxes = self.get_boxes(box_regs, casacade_boxes, image_shapes)
+                boxes = [boxes_per_image.detach() for boxes_per_image in boxes]
+                boxes, box_img_ids, box_pid_labels, box_reg_targets = self.select_training_samples(boxes, targets)
+            else:
+                # The IoUs of these boxes are higher than that of proposals,
+                # so a higher NMS threshold is needed
+                orig_thresh = self.nms_thresh
+                self.nms_thresh = 0.5
+                boxes, scores, embeddings, labels = self.postprocess_boxes(
+                        box_cls_scores,
+                        box_regs,
+                        box_embeddings,
+                        boxes,
+                        image_shapes,
+                        fcs=scores,
+                        gt_det=gt_det,
+                        cws=cws,
+                    )
+                if boxes[0].shape[0] == 0:
+                    assert not self.training
+                    device = boxes[0].device
+                    boxes = [torch.zeros(0, 4).to(device)]
+                    labels = [torch.zeros(0).to(device)]
+                    scores = [torch.zeros(0).to(device)]
+                    embeddings = [torch.zeros(0, self.emb_dim).to(device)]
+                    return [dict(boxes=torch.cat(boxes), labels=torch.cat(labels), scores=torch.cat(scores), embeddings=torch.cat(embeddings))], {}
+                else:
+                    scores = [torch.empty(0)]
+        
         # --------------------- Baseline head -------------------- #
         ###
         reg_boxes = boxes
@@ -564,13 +795,21 @@ class SeqRoIHeads(RoIHeads):
             box_labels = [torch.empty(0)]
 
         ###
+
         box_features = self.reid_roi_pool(bb_features, reg_boxes, image_shapes)
+        # print(box_features.shape)
+        # num_zeros = (box_features == 0).sum().item()
+        # print(num_zeros)
         # print(box_labels)
         if self.training: 
             register_targets_for_pn(self.box_head, torch.cat(box_labels).long())
             register_targets_for_pn(self.embedding_head, torch.cat(box_labels).long())
-
-        reid_features = box_features = self.box_head(box_features)
+        if  self.two_stage_decouple:
+            reid_features=self.box_head(box_features)
+            box_features=self.prop_head2(box_features)
+        else:
+            reid_features = box_features = self.box_head(box_features)
+        
         if(self.decouple_mode==False):
             box_embeddings, box_cls_scores = self.embedding_head(reid_features)
         else:
@@ -591,10 +830,10 @@ class SeqRoIHeads(RoIHeads):
         if box_cls_scores.dim() == 0:
             box_cls_scores = box_cls_scores.unsqueeze(0)
 
-        result, losses = [{}], {}
+
         if self.training:
             # Detection losses
-            losses = detection_losses(
+            losses = losses | detection_losses(
                 proposal_cls_scores,
                 proposal_regs,
                 proposal_labels,
@@ -611,19 +850,6 @@ class SeqRoIHeads(RoIHeads):
             _box_reg_targets= torch.cat(box_reg_targets)
             _reg_boxes=torch.cat(reg_boxes)
 
-            # print(len(box_pid_labels))
-            # print(_box_pid_labels.shape)    
-            # #6
-            # #[6x128,4]
-
-            # print(len(boxes))
-            # print(_boxes.shape)
-            # #6
-            # #[6x128,4]
-            # print(len(targets))
-            # print(_box_reg_targets.shape)
-            # #6
-            # #[6x128,4]
 
             fg_mask = _box_pid_labels > 0 
             fg_box_embeddings = box_embeddings[fg_mask]
@@ -631,24 +857,12 @@ class SeqRoIHeads(RoIHeads):
             ## GFN
             query_labels = _box_pid_labels[fg_mask]-1
             query_feats = fg_box_embeddings
-
-            # print(box_embeddings.shape)
-            # print(fg_mask.shape)
-            # print(len(query_labels))
-            # # 30
-            # print(len(query_feats))
-            # # 30
-
-            # print(len(reg_boxes))
-            # print(reg_boxes[1].shape)
             query_boxes=_reg_boxes[fg_mask]
             query_boxes_target=_box_reg_targets[fg_mask]
 
 
             ## Compute re-id loss
-            
-
-            if self.oim_type == 'LOIM':
+            if self.oim_type == 'LOIM'or self.oim_type=='ArcOIM' or self.oim_type=='circleOIM':
                 max_iou_list = []
                 # step1. compute IoU between all proposals and all ground-truth boxes
                 # step2. select the maximum ground-truth box for each proposal
@@ -659,13 +873,16 @@ class SeqRoIHeads(RoIHeads):
                     ious = box_ops.box_iou(box_p, box_t) 
                     ious_max = torch.max(ious, dim=1)[0] 
                     max_iou_list.append(ious_max)
-                ious = torch.cat(max_iou_list, dim=0)
-                # print(ious.mean())
-                sim_loss = self.reid_loss(query_feats, query_labels,ious)
+                if(len(max_iou_list)!=0):
+                    ious = torch.cat(max_iou_list, dim=0)
+                    sim_loss = self.reid_loss(query_feats, query_labels,ious)
+                    losses['sim_loss'] = sim_loss
+                else:
+                    losses['sim_loss'] = torch.tensor(0.0)
             else:
                 sim_loss = self.reid_loss(query_feats, query_labels)
+                losses['sim_loss'] = sim_loss
 
-            losses['sim_loss'] = sim_loss
             #losses.update(sim_loss=sim_loss)
         else:
             # The IoUs of these boxes are higher than that of proposals,
@@ -682,7 +899,6 @@ class SeqRoIHeads(RoIHeads):
                 gt_det=gt_det,
                 cws=cws,
             )
-       
             # set to original thresh after finishing postprocess
             self.nms_thresh = orig_thresh
             num_images = len(boxes)
@@ -691,7 +907,9 @@ class SeqRoIHeads(RoIHeads):
                 result[i] = dict(
                     boxes=boxes[i], labels=labels[i],
                     scores=scores[i], embeddings=embeddings[i]
-                )
+                ) 
+                
+    
         return result, losses
 
     def get_boxes(self, box_regression: Tensor, proposals: List[Tensor], image_shapes: List[Tuple[int, int]]) -> List[Tensor]:
@@ -1115,4 +1333,47 @@ def detection_losses(
         loss_proposal_reg=loss_proposal_reg,
         loss_box_cls=loss_box_cls,
         loss_box_reg=loss_box_reg,
+    )
+
+def detection_losses_casacade(
+    box_cls_scores: Tensor,
+    box_regs: Tensor,
+    box_labels: List[Tensor],
+    box_reg_targets: List[Tensor],
+    focal_loss=False,
+    l1_loss_focal=False
+    ) -> Dict[str, Tensor]:
+
+    box_labels = torch.cat(box_labels, dim=0)
+    box_reg_targets = torch.cat(box_reg_targets, dim=0)
+
+    if(focal_loss):
+        _loss_box_cls=sigmoid_focal_loss(box_cls_scores,box_labels.float(), reduction='none')
+
+    else:
+        _loss_box_cls = F.binary_cross_entropy_with_logits(box_cls_scores, box_labels.float(), reduction='none')
+    loss_box_cls = (_loss_box_cls / _loss_box_cls.size(0)).sum()
+
+    sampled_pos_inds_subset = torch.nonzero(box_labels > 0).squeeze(1)
+    labels_pos = box_labels[sampled_pos_inds_subset]
+    N = box_cls_scores.size(0)
+    box_regs = box_regs.reshape(N, -1, 4)
+
+    if(l1_loss_focal):
+         loss_box_reg = focal_l1_loss(
+            box_regs[sampled_pos_inds_subset, labels_pos],
+            box_reg_targets[sampled_pos_inds_subset],
+            beta=0.5
+        )
+    else:
+        loss_box_reg = F.smooth_l1_loss(
+            box_regs[sampled_pos_inds_subset, labels_pos],
+            box_reg_targets[sampled_pos_inds_subset],
+            reduction="none",
+        )
+    loss_box_reg = (loss_box_reg / box_labels.numel()).sum()
+
+    return dict(
+        loss_box_cls_casacade=loss_box_cls,
+        loss_box_reg_casacade=loss_box_reg,
     )

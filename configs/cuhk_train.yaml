@@ -1,0 +1,88 @@
+# # Dataset
+# dataset: 'cuhk'
+# dataset_dir: '/home/lyh/data/dataset/cuhk_sysu/cuhk_sysu'
+# train_set: 'trainval'
+# test_set: 'test'
+# retrieval_name_list: ('G100',)
+# Dataset
+dataset: 'cuhk'
+dataset_dir: '/home/lyh/data/dataset/cuhk_sysu/cuhk_sysu'
+train_set: 'trainval'
+test_set: 'test'
+retrieval_name_list: ('G50', 'G100', 'G500', 'G1000', 'G2000', 'G4000', 'GOcclusion', 'GResolution')
+test_only: True
+ckpt_path: '/home/lyh/data/EDIT_NETWORK/cuhk_checkpoints/(beeest)WrappedDistributedTorchTrainable_4d4b8_00000_0_2023-12-21_18-04-17/checkpoint_000050/checkpoint.pkl'
+
+# OIM
+oim_type: "circleOIM"
+oim_cq_size: 5000
+# ## OIM LUT update momentum
+# oim_momentum: 0.5
+# ### Inverse temperature parameter
+oim_scalar: 30.0
+circle_m: 0.25
+# oim_scalar: 128 #circle loss 
+emb_norm_type: 'protonorm'
+# decouple_mode: False
+# Model
+# model: 'resnet'
+# backbone_arch: 'resnet50'
+
+model: 'convnext'
+backbone_arch: 'convnext_fpn'
+
+user_arm_module: False
+pretrained: True
+
+
+# GFN
+use_gfn: True
+gfn_mode: 'combined'
+gfn_query_mode: 'batch'
+gfn_num_sample: (1, 1)
+# gfn_query_mode: 'oim'
+gfn_scene_pool_size: 56
+
+# Optimization
+epochs: 50
+batch_size: 3
+# optimizer: ('adam', 1e-4)
+optimizer: ('AdamW_GC2', 5e-5)
+# use_amp: False
+lr_steps: (15,35)
+# scheduler: 'cosine'
+# use_warmup: False
+use_warmup: True
+
+# Augmentation
+aug_mode: 'rrc2'
+aug_crop_res: 640
+
+
+# Logging
+trial_name: 'cuhk_final'
+eval_interval: 5
+ckpt_interval: 10
+log_dir: './logging'
+
+# box_head_mode: 'nae'
+share_head: False
+pytorch.compile: False
+use_amp: True
+
+num_workers: 1
+num_cpus_per_trial: 10
+num_gpus_per_trial: 1
+
+#roi
+ps_roi_align: False
+focal_loss: True
+l1_loss_focal: True
+decouple_mode: False
+
+use_gem: True
+two_stage_decouple: True
+use_casacade_head: True
+
+debug: False 
+no_distribute: True

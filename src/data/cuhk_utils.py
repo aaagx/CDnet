@@ -10,7 +10,8 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
 # Local imports
-from . import coco_utils
+import coco_utils
+# from data import coco_utils
 
 
 def _load_annotations(root, split):
@@ -357,6 +358,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_dir', type=str, default='/datasets/cuhk')
     args = parser.parse_args() 
-
+    print(args)
     # Build the COCO dataset for CUHK
     cuhk2coco(args.dataset_dir)
+
+# Run as module
+if __name__ == '__main__':
+    main()

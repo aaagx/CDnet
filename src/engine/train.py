@@ -30,14 +30,12 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, op
 
     # Set up scaler for AMP
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-
-    # Train loop
     for train_iter, (_images, _targets) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         try:
+
             # Move images and targets to GPU
             images = list(image.to(device) for image in _images)
             targets = [{k:(v.to(device) if type(v) != list else v) for k, v in t.items()} for t in _targets]
-
             # Standard SGD forward pass
             optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=use_amp): 
@@ -97,6 +95,6 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, op
 
             # Raise the exception
             raise
-
+    torch.cuda.empty_cache()
     # Return metrics
     return metric_logger

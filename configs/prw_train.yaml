@@ -1,0 +1,82 @@
+# Dataset
+dataset: 'prw'
+dataset_dir: '/home/lyh/dataset/PRW-v16.04.20'
+train_set: 'trainval'
+test_set: 'test'
+retrieval_name_list: ('test',)
+workers: 2
+# OIM
+# oim_type: "LOIM"
+oim_type: "circleOIM"
+oim_cq_size: 500
+## OIM LUT update momentum
+oim_momentum: 0.5
+### Inverse temperature parameter
+oim_scalar: 30.0
+circle_m: 0.25
+# oim_scalar: 128 #circle loss 
+emb_norm_type: 'protonorm'
+# decouple_mode: False
+# Model
+# model: 'resnet'
+# backbone_arch: 'resnet50'
+
+model: 'convnext'
+backbone_arch: 'convnext_fpn'
+
+user_arm_module: False
+pretrained: True
+
+
+# GFN
+use_gfn: True
+gfn_mode: 'combined'
+gfn_query_mode: 'batch'
+gfn_num_sample: (1, 1)
+# gfn_query_mode: 'oim'
+gfn_scene_pool_size: 56
+
+# Optimization
+epochs: 50
+batch_size: 4
+# optimizer: ('adam', 1e-4)
+optimizer: ('AdamW_GC2', 6e-5)
+# use_amp: False
+lr_steps: (15,35)
+# scheduler: 'cosine'
+# use_warmup: False
+use_warmup: True
+
+# Augmentation
+aug_mode: 'rrc2'
+aug_crop_res: 640
+
+
+# Logging
+trial_name: 'prw_final'
+eval_interval: 5
+ckpt_interval: 5
+log_dir: './logging'
+
+# box_head_mode: 'nae'
+share_head: False
+debug: False
+pytorch.compile: False
+use_amp: True
+
+num_workers: 1
+num_cpus_per_trial: 15
+num_gpus_per_trial: 1
+
+#roi
+ps_roi_align: True
+focal_loss: True
+l1_loss_focal: True
+decouple_mode: False
+
+use_gem: True
+two_stage_decouple: True
+use_casacade_head: False
+
+no_distribute: True
+use_gt: True

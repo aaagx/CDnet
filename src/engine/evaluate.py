@@ -86,7 +86,8 @@ def get_gfn_scores(model, image_lookup, query_embeddings, query_image_feat_list,
         query_img_feat_mat = torch.cat(query_image_feat_list, dim=0)
         gallery_img_feat_mat = torch.cat([image_lookup[query_id].features for query_id in image_lookup], dim=0)
         ## Get GFN
-        if is_distributed_trainable():
+        # if is_distributed_trainable():
+        if hasattr(model, 'module'):
             gfn = model.module.gfn
         else:
             gfn = model.gfn
@@ -161,7 +162,7 @@ def get_model_output(model, data_loader, use_gfn=False, use_amp=False, device='c
 def evaluate_performance(
     model, data_loader, device,
     use_amp=False, use_gfn=False, gfn_mode=None,
-    report_timing=False,
+    report_timing=False,use_gt=False
 ):
     # Get model output
     query_lookup, query_embeddings, image_lookup, detection_lookup, gfn_score_dict = get_model_output(model, data_loader,
@@ -174,13 +175,15 @@ def evaluate_performance(
     print('==> Computing detection performance')
     detection_metric_dict, retrieval_dict = evaluate_detection_orig(data_loader.sampler.partition_name,
         detection_lookup, image_lookup, query_embeddings, gfn_score_dict=gfn_score_dict)
-    gt_detection_metric_dict, gt_retrieval_dict = evaluate_detection_orig(data_loader.sampler.partition_name,
-        image_lookup, image_lookup, query_embeddings, gfn_score_dict=gfn_score_dict)
     metric_dict.update(detection_metric_dict)
     print('det:')
     pprint(detection_metric_dict)
-    print('gt:')
-    pprint(gt_detection_metric_dict)
+
+    if use_gt:
+        gt_detection_metric_dict, gt_retrieval_dict = evaluate_detection_orig(data_loader.sampler.partition_name,
+            image_lookup, image_lookup, query_embeddings, gfn_score_dict=gfn_score_dict)
+        print('gt:')
+        pprint(gt_detection_metric_dict)
 
     # Get retrieval protocol information
     protocol_list = get_protocol_list(data_loader)
@@ -192,17 +195,20 @@ def evaluate_performance(
         for _use_gfn in [False, True] if use_gfn else [False]:
             retrieval_metric_dict, retrieval_value_dict = evaluate_retrieval_orig(protocol,
                 retrieval_dict, query_lookup, image_lookup, use_gt=False, use_gfn=_use_gfn)
-            gt_retrieval_metric_dict, gt_retrieval_value_dict = evaluate_retrieval_orig(protocol,
-                gt_retrieval_dict, query_lookup, image_lookup, use_gt=True, use_gfn=_use_gfn)
             print('det:')
             pprint(retrieval_metric_dict)
-            print('gt:')
-            pprint(gt_retrieval_metric_dict)
-            # Store results for this set
-            metric_dict.update(gt_retrieval_metric_dict)
             metric_dict.update(retrieval_metric_dict)
-            value_dict.update(gt_retrieval_value_dict)
             value_dict.update(retrieval_value_dict)
+            if use_gt:
+                gt_retrieval_metric_dict, gt_retrieval_value_dict = evaluate_retrieval_orig(protocol,
+                    gt_retrieval_dict, query_lookup, image_lookup, use_gt=True, use_gfn=_use_gfn)
+                print('gt:')
+                pprint(gt_retrieval_metric_dict)
+                # Store results for this set
+                metric_dict.update(gt_retrieval_metric_dict)
+                value_dict.update(gt_retrieval_value_dict)
+                
+
 
     # Report metrics 
     print('\n==> Full metrics:')
