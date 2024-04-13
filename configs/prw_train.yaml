@@ -1,6 +1,6 @@
 # Dataset
 dataset: 'prw'
-dataset_dir: '/home/lyh/dataset/PRW-v16.04.20'
+dataset_dir: 
 train_set: 'trainval'
 test_set: 'test'
 retrieval_name_list: ('test',)

@@ -1,17 +1,4 @@
-# # Dataset
-# dataset: 'cuhk'
-# dataset_dir: '/home/lyh/data/dataset/cuhk_sysu/cuhk_sysu'
-# train_set: 'trainval'
-# test_set: 'test'
-# retrieval_name_list: ('G100',)
-# Dataset
-dataset: 'cuhk'
-dataset_dir: '/home/lyh/data/dataset/cuhk_sysu/cuhk_sysu'
-train_set: 'trainval'
-test_set: 'test'
-retrieval_name_list: ('G50', 'G100', 'G500', 'G1000', 'G2000', 'G4000', 'GOcclusion', 'GResolution')
-test_only: True
-ckpt_path: '/home/lyh/data/EDIT_NETWORK/cuhk_checkpoints/(beeest)WrappedDistributedTorchTrainable_4d4b8_00000_0_2023-12-21_18-04-17/checkpoint_000050/checkpoint.pkl'
+
 
 # OIM
 oim_type: "circleOIM"
